@@ -11,6 +11,7 @@ import { LoginDto } from './dto/login.dto';
 import { RefreshTokenDto } from './dto/refresh-token.dto';
 import { RegisterDto } from './dto/register.dto';
 import { JwtPayload } from './strategies/jwt.strategy';
+import { UserRole } from '@prisma/client';
 
 type AuthTokens = {
 	accessToken: string;
@@ -20,6 +21,7 @@ type AuthTokens = {
 type AuthUser = {
 	id: string;
 	email: string;
+	role: UserRole;
 };
 
 type AuthResponse = AuthTokens & { user: AuthUser };
@@ -29,7 +31,7 @@ export class AuthService {
 	constructor(
 		private readonly prisma: PrismaService,
 		private readonly jwtService: JwtService,
-	) {}
+	) { }
 
 	async register(payload: RegisterDto): Promise<AuthResponse> {
 		const existing = await this.prisma.user.findFirst({
@@ -44,18 +46,21 @@ export class AuthService {
 
 		const passwordHash = await this.hashPassword(payload.password);
 
+		// IDENTITY & ACCESS CONTROL: User table remains minimal and security-focused.
 		const user = await this.prisma.user.create({
 			data: {
 				email: payload.email,
 				username: payload.username,
 				passwordHash,
+				// USER PROFILE LAYER: Initialized during registration.
+				// Profile creation is minimal for now; details can be completed by the learner later.
 				profile: {
 					create: {},
 				},
 			},
 		});
 
-		return this.buildAuthResponse(user.id, user.email);
+		return this.buildAuthResponse(user.id, user.email, user.role);
 	}
 
 	async login(payload: LoginDto): Promise<AuthResponse> {
@@ -78,7 +83,7 @@ export class AuthService {
 			data: { lastLogin: new Date() },
 		});
 
-		return this.buildAuthResponse(user.id, user.email);
+		return this.buildAuthResponse(user.id, user.email, user.role);
 	}
 
 	async refreshTokens(payload: RefreshTokenDto): Promise<AuthResponse> {
@@ -98,7 +103,7 @@ export class AuthService {
 			throw new UnauthorizedException('Invalid refresh token');
 		}
 
-		return this.buildAuthResponse(user.id, user.email);
+		return this.buildAuthResponse(user.id, user.email, user.role);
 	}
 
 	private async hashPassword(password: string): Promise<string> {
@@ -106,7 +111,7 @@ export class AuthService {
 	}
 
 	private signTokens(user: AuthUser): AuthTokens {
-		const payload: JwtPayload = { sub: user.id, email: user.email };
+		const payload: JwtPayload = { sub: user.id, email: user.email, role: user.role };
 
 		const expiresInAccess = authConstants.accessTokenTtl as JwtSignOptions['expiresIn'];
 		const expiresInRefresh = authConstants.refreshTokenTtl as JwtSignOptions['expiresIn'];
@@ -124,12 +129,12 @@ export class AuthService {
 		return { accessToken, refreshToken };
 	}
 
-	private buildAuthResponse(userId: string, email: string): AuthResponse {
-		const tokens = this.signTokens({ id: userId, email });
+	private buildAuthResponse(userId: string, email: string, role: UserRole): AuthResponse {
+		const tokens = this.signTokens({ id: userId, email, role });
 
 		return {
 			...tokens,
-			user: { id: userId, email },
+			user: { id: userId, email, role },
 		};
 	}
 }

@@ -1,13 +1,13 @@
-import { IsInt, IsOptional, IsUUID, Max, Min } from 'class-validator';
+import { IsInt, IsOptional, IsString, Max, Min } from 'class-validator';
 
 export class UpdateContextDto {
 	@IsOptional()
-	@IsUUID()
-	activeExamId?: string;
+	@IsString()
+	targetExamId?: string;
 
 	@IsOptional()
 	@IsInt()
 	@Min(1900)
 	@Max(3000)
-	activeExamYear?: number;
+	targetExamYear?: number;
 }

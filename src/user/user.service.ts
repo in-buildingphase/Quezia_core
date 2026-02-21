@@ -4,7 +4,7 @@ import { UpdateContextDto } from './dto/update-profile.dto';
 
 @Injectable()
 export class UserService {
-	constructor(private readonly prisma: PrismaService) {}
+	constructor(private readonly prisma: PrismaService) { }
 
 	async getMe(userId: string) {
 		const user = await this.prisma.user.findUnique({
@@ -15,9 +15,8 @@ export class UserService {
 				username: true,
 				profile: {
 					select: {
-						activeExamId: true,
-						activeExamYear: true,
-						accountTier: true,
+						targetExamId: true,
+						targetExamYear: true,
 						displayName: true,
 						country: true,
 						timezone: true,
@@ -39,13 +38,13 @@ export class UserService {
 		await this.prisma.userProfile.upsert({
 			where: { userId },
 			update: {
-				activeExamId: payload.activeExamId ?? null,
-				activeExamYear: payload.activeExamYear ?? null,
+				targetExamId: payload.targetExamId ?? null,
+				targetExamYear: payload.targetExamYear ?? null,
 			},
 			create: {
 				userId,
-				activeExamId: payload.activeExamId ?? null,
-				activeExamYear: payload.activeExamYear ?? null,
+				targetExamId: payload.targetExamId ?? null,
+				targetExamYear: payload.targetExamYear ?? null,
 			},
 		});
 
