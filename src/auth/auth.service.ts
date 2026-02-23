@@ -4,6 +4,8 @@ import {
 	UnauthorizedException,
 	NotFoundException,
 	BadRequestException,
+	HttpException,
+	HttpStatus,
 } from '@nestjs/common';
 import { JwtService, type JwtSignOptions } from '@nestjs/jwt';
 import * as bcrypt from 'bcrypt';
@@ -74,6 +76,9 @@ export class AuthService {
 		return response;
 	}
 
+	private static readonly MAX_FAILED_ATTEMPTS = 5;
+	private static readonly LOCKOUT_DURATION_MS = 15 * 60 * 1000; // 15 minutes
+
 	async login(payload: LoginDto): Promise<AuthResponse> {
 		const user = await this.prisma.user.findUnique({
 			where: { email: payload.email },
@@ -84,10 +89,38 @@ export class AuthService {
 			throw new UnauthorizedException('Invalid credentials');
 		}
 
+		// Check if account is currently locked
+		if (user.lockedUntil && user.lockedUntil > new Date()) {
+			const retryAfterSeconds = Math.ceil((user.lockedUntil.getTime() - Date.now()) / 1000);
+			await this.logAuthEvent(user.id, AuthEventType.LOGIN, AuthEventStatus.FAILURE, { reason: 'Account locked' });
+			throw new HttpException(
+				{ message: 'Account temporarily locked due to too many failed attempts', retryAfterSeconds },
+				HttpStatus.TOO_MANY_REQUESTS,
+			);
+		}
+
 		const isValid = await bcrypt.compare(payload.password, user.passwordHash);
 
 		if (!isValid) {
-			await this.logAuthEvent(user.id, AuthEventType.LOGIN, AuthEventStatus.FAILURE, { reason: 'Invalid password' });
+			const newFailedCount = user.failedLoginAttempts + 1;
+			const isNowLocked = newFailedCount >= AuthService.MAX_FAILED_ATTEMPTS;
+			await this.prisma.user.update({
+				where: { id: user.id },
+				data: {
+					failedLoginAttempts: newFailedCount,
+					lockedUntil: isNowLocked ? new Date(Date.now() + AuthService.LOCKOUT_DURATION_MS) : null,
+				},
+			});
+			await this.logAuthEvent(user.id, AuthEventType.LOGIN, AuthEventStatus.FAILURE, {
+				reason: 'Invalid password',
+				failedAttempts: newFailedCount,
+			});
+			if (isNowLocked) {
+				throw new HttpException(
+					{ message: 'Account temporarily locked due to too many failed attempts', retryAfterSeconds: AuthService.LOCKOUT_DURATION_MS / 1000 },
+					HttpStatus.TOO_MANY_REQUESTS,
+				);
+			}
 			throw new UnauthorizedException('Invalid credentials');
 		}
 
@@ -96,9 +129,10 @@ export class AuthService {
 			throw new UnauthorizedException('Account is disabled');
 		}
 
+		// Successful login — reset lockout counters
 		await this.prisma.user.update({
 			where: { id: user.id },
-			data: { lastLogin: new Date() },
+			data: { lastLogin: new Date(), failedLoginAttempts: 0, lockedUntil: null },
 		});
 
 		const response = await this.buildAuthResponse(user.id, user.email, user.role);

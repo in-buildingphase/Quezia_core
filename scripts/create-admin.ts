@@ -36,12 +36,18 @@ async function main() {
                 username: adminDetails.username,
                 passwordHash: passwordHash,
                 role: adminDetails.role,
+                isActive: true,
+                failedLoginAttempts: 0,
+                lockedUntil: null,
             },
             create: {
                 email: adminDetails.email,
                 username: adminDetails.username,
                 passwordHash: passwordHash,
                 role: adminDetails.role,
+                isActive: true,
+                failedLoginAttempts: 0,
+                lockedUntil: null,
                 profile: {
                     create: {},
                 },

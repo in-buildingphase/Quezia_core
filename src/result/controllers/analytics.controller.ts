@@ -1,4 +1,4 @@
-import { Controller, Get, Param, UseGuards } from '@nestjs/common';
+import { Controller, Get, NotFoundException, Param, UseGuards } from '@nestjs/common';
 import { PrismaService } from '../../prisma/prisma.service';
 import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
 import { CurrentUser } from '../../common/decorators/current-user.decorator';
@@ -13,7 +13,13 @@ export class AnalyticsController {
     @Param('examId') examId: string,
     @CurrentUser() user: { userId: string },
   ) {
-    return this.prisma.userExamAnalytics.findUnique({
+    const exam = await this.prisma.exam.findUnique({
+      where: { id: examId },
+      select: { id: true, name: true, isActive: true },
+    });
+    if (!exam) throw new NotFoundException(`Exam ${examId} not found`);
+
+    const analytics = await this.prisma.userExamAnalytics.findUnique({
       where: {
         userId_examId: {
           userId: user.userId,
@@ -21,6 +27,9 @@ export class AnalyticsController {
         },
       },
     });
+
+    if (!analytics) return { exam };
+    return { exam, ...analytics };
   }
 
   @Get('exam/:examId/subjects')

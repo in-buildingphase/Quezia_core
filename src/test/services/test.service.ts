@@ -220,6 +220,27 @@ export class TestService {
     }
 
     // ─────────────────────────────────────────────────────────────────────────
+    // TEST: delete (constraint-guarded)
+    // Refuses deletion if any COMPLETED attempts exist.
+    // ─────────────────────────────────────────────────────────────────────────
+    async deleteTest(testId: string, role: UserRole): Promise<{ message: string }> {
+        if (role !== UserRole.ADMIN) {
+            throw new ForbiddenException('Only admins can delete tests');
+        }
+        const test = await this.prisma.test.findUnique({ where: { id: testId } });
+        if (!test) throw new NotFoundException(`Test ${testId} not found`);
+
+        const attemptCount = await this.prisma.testAttempt.count({ where: { testId } });
+        if (attemptCount > 0) {
+            throw new BadRequestException(
+                `Cannot delete test: ${attemptCount} attempt(s) exist. Archive the test instead.`,
+            );
+        }
+        await this.prisma.test.delete({ where: { id: testId } });
+        return { message: 'Test deleted successfully' };
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────
     // Private helpers
     // ─────────────────────────────────────────────────────────────────────────
     private assertThreadOwnership(

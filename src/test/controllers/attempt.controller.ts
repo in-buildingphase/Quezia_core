@@ -31,15 +31,16 @@ export class AttemptController {
     @Param('testId') testId: string,
     @CurrentUser() user: { userId: string },
   ) {
-    return this.testLifecycleService.startAttempt(testId, user.userId);
+    const attempt = await this.testLifecycleService.startAttempt(testId, user.userId);
+    return { id: attempt.id, status: attempt.status };
   }
 
-  @Get(':attemptId/questions')
+  @Get(':id/questions')
   async getAttemptQuestions(
-    @Param('attemptId') attemptId: string,
+    @Param('id') id: string,
     @CurrentUser() user: { userId: string },
   ) {
-    return this.testLifecycleService.getAttemptQuestions(attemptId, user.userId);
+    return this.testLifecycleService.getAttemptQuestions(id, user.userId);
   }
 
   @Post(':id/submit')

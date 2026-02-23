@@ -81,7 +81,10 @@ export class TestLifecycleService {
   async startAttempt(testId: string, userId: string) {
     const test = await this.prisma.test.findUnique({
       where: { id: testId },
-      include: { questions: true },
+      include: {
+        questions: true,
+        thread: { select: { originType: true } },
+      },
     });
 
     if (!test) throw new NotFoundException('Test not found');
@@ -92,20 +95,25 @@ export class TestLifecycleService {
     }
 
     // --- Subscription gating ---
-    // Admins are exempt; all other roles need an ACTIVE subscription.
-    const actor = await this.prisma.user.findUnique({
-      where: { id: userId },
-      select: { role: true },
-    });
-    if (actor?.role !== UserRole.ADMIN) {
-      const hasAccess = await this.subscriptionService.hasActiveAccess(
-        userId,
-        test.examId,
-      );
-      if (!hasAccess) {
-        throw new ForbiddenException(
-          `No active subscription found for exam ${test.examId}`,
+    // Only SYSTEM tests require an active subscription.
+    // GENERATED and INJECTED tests are accessible to any authenticated user.
+    // Admins are always exempt.
+    const isSystemTest = test.thread?.originType === 'SYSTEM';
+    if (isSystemTest) {
+      const actor = await this.prisma.user.findUnique({
+        where: { id: userId },
+        select: { role: true },
+      });
+      if (actor?.role !== UserRole.ADMIN) {
+        const hasAccess = await this.subscriptionService.hasActiveAccess(
+          userId,
+          test.examId,
         );
+        if (!hasAccess) {
+          throw new ForbiddenException(
+            `No active subscription found for exam ${test.examId}`,
+          );
+        }
       }
     }
 

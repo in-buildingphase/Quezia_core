@@ -1,4 +1,4 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
+import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { CreateExamDto } from './dto/create-exam.dto';
 import { UpdateExamDto } from './dto/update-exam.dto';
@@ -56,6 +56,31 @@ export class ExamService {
         }
 
         return exam;
+    }
+
+    async deleteExam(id: string): Promise<{ message: string }> {
+        await this.getExamById(id);
+        const testCount = await this.prisma.test.count({ where: { examId: id } });
+        if (testCount > 0) {
+            throw new BadRequestException(
+                `Cannot delete exam: ${testCount} test(s) are associated with it. Archive or remove all tests first.`,
+            );
+        }
+        await this.prisma.exam.delete({ where: { id } });
+        return { message: 'Exam deleted successfully' };
+    }
+
+    async deleteBlueprint(blueprintId: string): Promise<{ message: string }> {
+        const blueprint = await this.prisma.examBlueprint.findUnique({ where: { id: blueprintId } });
+        if (!blueprint) throw new NotFoundException(`Blueprint ${blueprintId} not found`);
+        const testCount = await this.prisma.test.count({ where: { blueprintReferenceId: blueprintId } });
+        if (testCount > 0) {
+            throw new BadRequestException(
+                `Cannot delete blueprint: ${testCount} test(s) reference it. Archive or remove those tests first.`,
+            );
+        }
+        await this.prisma.examBlueprint.delete({ where: { id: blueprintId } });
+        return { message: 'Blueprint deleted successfully' };
     }
 
     async createBlueprint(examId: string, dto: CreateBlueprintDto) {

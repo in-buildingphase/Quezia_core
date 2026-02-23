@@ -1,0 +1,687 @@
+#1  NUMERIC exact answers complete
+     Module   : Question Registry & Validation
+     Endpoint : POST /attempts/:id/submit-test
+     Expected : 200
+     Actual   : {"message":"Cannot POST /attempts//submit-test","error":"Not Found","statusCode":404}
+     Response : {"message":"Cannot POST /attempts//submit-test","error":"Not Found","statusCode":404} 
+
+  #2  Start attempt
+     Module   : Tests, Attempts & Lifecycle
+     Endpoint : POST /attempts/:testId/start
+     Expected : 201
+     Actual   : 403
+     Response : {"message":"No active subscription found for exam cmlyj4ids006n6ary0db48cjz","error":"Forbidden","statusCode":403} 
+
+  #3    has id (field: id)
+     Module   : Tests, Attempts & Lifecycle
+     Endpoint : POST /attempts/:testId/start
+     Expected : present
+     Actual   : missing
+     Response : {"message":"No active subscription found for exam cmlyj4ids006n6ary0db48cjz","error":"Forbidden","statusCode":403} 
+
+  #4    status ACTIVE
+     Module   : Tests, Attempts & Lifecycle
+     Endpoint : POST /attempts/:testId/start
+     Expected : contains '"status":"ACTIVE"'
+     Actual   : not found
+     Response : {"message":"No active subscription found for exam cmlyj4ids006n6ary0db48cjz","error":"Forbidden","statusCode":403} 
+
+  #5  Second start returns existing attempt
+     Module   : Tests, Attempts & Lifecycle
+     Endpoint : POST /attempts/:testId/start
+     Expected : 201
+     Actual   : 403
+     Response : {"message":"No active subscription found for exam cmlyj4ids006n6ary0db48cjz","error":"Forbidden","statusCode":403} 
+
+  #6  GET attempt questions
+     Module   : Tests, Attempts & Lifecycle
+     Endpoint : GET /attempts/:id/questions
+     Expected : 200
+     Actual   : 404
+     Response : {"message":"Cannot GET /attempts//questions","error":"Not Found","statusCode":404} 
+
+  #7    returns array
+     Module   : Tests, Attempts & Lifecycle
+     Endpoint : GET /attempts/:id/questions
+     Expected : contains '\['
+     Actual   : not found
+     Response : {"message":"Cannot GET /attempts//questions","error":"Not Found","statusCode":404} 
+
+  #8  Submit correct answer (Q1)
+     Module   : Tests, Attempts & Lifecycle
+     Endpoint : POST /attempts/:id/submit
+     Expected : 201
+     Actual   : 404
+     Response : {"message":"Cannot POST /attempts//submit","error":"Not Found","statusCode":404} 
+
+  #9  Submit wrong answer (Q3)
+     Module   : Tests, Attempts & Lifecycle
+     Endpoint : POST /attempts/:id/submit
+     Expected : 201
+     Actual   : 404
+     Response : {"message":"Cannot POST /attempts//submit","error":"Not Found","statusCode":404} 
+
+  #10  Submit correct answer (Q4)
+     Module   : Tests, Attempts & Lifecycle
+     Endpoint : POST /attempts/:id/submit
+     Expected : 201
+     Actual   : 404
+     Response : {"message":"Cannot POST /attempts//submit","error":"Not Found","statusCode":404} 
+
+  #11  Complete attempt (grading)
+     Module   : Tests, Attempts & Lifecycle
+     Endpoint : POST /attempts/:id/submit-test
+     Expected : 200
+     Actual   : 404
+     Response : {"message":"Cannot POST /attempts//submit-test","error":"Not Found","statusCode":404} 
+
+  #12    has totalScore (field: totalScore)
+     Module   : Tests, Attempts & Lifecycle
+     Endpoint : POST /attempts/:id/submit-test
+     Expected : present
+     Actual   : missing
+     Response : {"message":"Cannot POST /attempts//submit-test","error":"Not Found","statusCode":404} 
+
+  #13    has accuracy (field: accuracy)
+     Module   : Tests, Attempts & Lifecycle
+     Endpoint : POST /attempts/:id/submit-test
+     Expected : present
+     Actual   : missing
+     Response : {"message":"Cannot POST /attempts//submit-test","error":"Not Found","statusCode":404} 
+
+  #14    has riskRatio (field: riskRatio)
+     Module   : Tests, Attempts & Lifecycle
+     Endpoint : POST /attempts/:id/submit-test
+     Expected : present
+     Actual   : missing
+     Response : {"message":"Cannot POST /attempts//submit-test","error":"Not Found","statusCode":404} 
+
+  #15    has percentile (field: percentile)
+     Module   : Tests, Attempts & Lifecycle
+     Endpoint : POST /attempts/:id/submit-test
+     Expected : present
+     Actual   : missing
+     Response : {"message":"Cannot POST /attempts//submit-test","error":"Not Found","statusCode":404} 
+
+  #16    has userRank (field: userRank)
+     Module   : Tests, Attempts & Lifecycle
+     Endpoint : POST /attempts/:id/submit-test
+     Expected : present
+     Actual   : missing
+     Response : {"message":"Cannot POST /attempts//submit-test","error":"Not Found","statusCode":404} 
+
+  #17    status COMPLETED
+     Module   : Tests, Attempts & Lifecycle
+     Endpoint : POST /attempts/:id/submit-test
+     Expected : contains '"status":"COMPLETED"'
+     Actual   : not found
+     Response : {"message":"Cannot POST /attempts//submit-test","error":"Not Found","statusCode":404} 
+
+  #18  Complete already-done 400
+     Module   : Tests, Attempts & Lifecycle
+     Endpoint : POST /attempts/:id/submit-test
+     Expected : 400
+     Actual   : 404
+     Response : {"message":"Cannot POST /attempts//submit-test","error":"Not Found","statusCode":404} 
+
+  #19  Zero-answer attempt completes
+     Module   : Tests, Attempts & Lifecycle
+     Endpoint : POST /attempts/:id/submit-test
+     Expected : 200
+     Actual   : 404
+     Response : {"message":"Cannot POST /attempts//submit-test","error":"Not Found","statusCode":404} 
+
+  #20    status COMPLETED
+     Module   : Tests, Attempts & Lifecycle
+     Endpoint : POST /attempts/:id/submit-test
+     Expected : contains '"status":"COMPLETED"'
+     Actual   : not found
+     Response : {"message":"Cannot POST /attempts//submit-test","error":"Not Found","statusCode":404} 
+
+  #21  Duplicate answer unexpected status
+     Module   : Tests, Attempts & Lifecycle
+     Endpoint : POST /attempts/:id/submit
+     Expected : 200/201 or 409
+     Actual   : 404
+     Response : answer overwrite behavior undefined
+
+  #22  Complete after overwrite
+     Module   : Tests, Attempts & Lifecycle
+     Endpoint : POST /attempts/:id/submit-test
+     Expected : 200
+     Actual   : 404
+     Response : {"message":"Cannot POST /attempts//submit-test","error":"Not Found","statusCode":404} 
+
+  #23  GET attempt (test now ARCHIVED)
+     Module   : Tests, Attempts & Lifecycle
+     Endpoint : GET /attempts/:id
+     Expected : 200
+     Actual   : 404
+     Response : {"message":"Cannot GET /attempts/","error":"Not Found","statusCode":404} 
+
+  #24    attempt status COMPLETED
+     Module   : Tests, Attempts & Lifecycle
+     Endpoint : GET /attempts/:id
+     Expected : contains '"status":"COMPLETED"'
+     Actual   : not found
+     Response : {"message":"Cannot GET /attempts/","error":"Not Found","statusCode":404} 
+
+  #25    attempt preserves totalScore (field: totalScore)
+     Module   : Tests, Attempts & Lifecycle
+     Endpoint : GET /attempts/:id
+     Expected : present
+     Actual   : missing
+     Response : {"message":"Cannot GET /attempts/","error":"Not Found","statusCode":404} 
+
+  #26    totalAttempts present (field: totalAttempts)
+     Module   : Tests, Attempts & Lifecycle
+     Endpoint : GET /analytics/exam/:examId
+     Expected : present
+     Actual   : missing
+     Response :  
+
+  #27  Analytics data lost after archival
+     Module   : Tests, Attempts & Lifecycle
+     Endpoint : GET /analytics/exam/:id
+     Expected : totalAttempts≥1
+     Actual   : 
+     Response : analytics purged on archive
+
+  #28  Start attempt
+     Module   : Analytics & Results
+     Endpoint : POST /attempts/:testId/start
+     Expected : 201
+     Actual   : 403
+     Response : {"message":"No active subscription found for exam cmlyj61y7009m6ary4006r8dc","error":"Forbidden","statusCode":403} 
+
+  #29  Complete attempt (benchmark)
+     Module   : Analytics & Results
+     Endpoint : POST /attempts/:id/submit-test
+     Expected : 200
+     Actual   : 404
+     Response : {"message":"Cannot POST /attempts//submit-test","error":"Not Found","statusCode":404} 
+
+  #30    has percentile (field: percentile)
+     Module   : Analytics & Results
+     Endpoint : POST /attempts/:id/submit-test
+     Expected : present
+     Actual   : missing
+     Response : {"message":"Cannot POST /attempts//submit-test","error":"Not Found","statusCode":404} 
+
+  #31    has userRank (field: userRank)
+     Module   : Analytics & Results
+     Endpoint : POST /attempts/:id/submit-test
+     Expected : present
+     Actual   : missing
+     Response : {"message":"Cannot POST /attempts//submit-test","error":"Not Found","statusCode":404} 
+
+  #32  Start grading attempt
+     Module   : Analytics & Results
+     Endpoint : POST /attempts/:testId/start
+     Expected : 201
+     Actual   : 403
+     Response : {"message":"No active subscription found for exam cmlyj6m6500am6aryc9j242od","error":"Forbidden","statusCode":403} 
+
+  #33  Submit Q1 (CORRECT)
+     Module   : Analytics & Results
+     Endpoint : POST /attempts/:id/submit
+     Expected : 201
+     Actual   : 404
+     Response : {"message":"Cannot POST /attempts//submit","error":"Not Found","statusCode":404} 
+
+  #34  Submit Q2 (CORRECT)
+     Module   : Analytics & Results
+     Endpoint : POST /attempts/:id/submit
+     Expected : 201
+     Actual   : 404
+     Response : {"message":"Cannot POST /attempts//submit","error":"Not Found","statusCode":404} 
+
+  #35  Submit Q3 (WRONG)
+     Module   : Analytics & Results
+     Endpoint : POST /attempts/:id/submit
+     Expected : 201
+     Actual   : 404
+     Response : {"message":"Cannot POST /attempts//submit","error":"Not Found","statusCode":404} 
+
+  #36  Submit Q4 (CORRECT)
+     Module   : Analytics & Results
+     Endpoint : POST /attempts/:id/submit
+     Expected : 201
+     Actual   : 404
+     Response : {"message":"Cannot POST /attempts//submit","error":"Not Found","statusCode":404} 
+
+  #37  Submit Q5 (WRONG)
+     Module   : Analytics & Results
+     Endpoint : POST /attempts/:id/submit
+     Expected : 201
+     Actual   : 404
+     Response : {"message":"Cannot POST /attempts//submit","error":"Not Found","statusCode":404} 
+
+  #38  Submit Q6 (CORRECT)
+     Module   : Analytics & Results
+     Endpoint : POST /attempts/:id/submit
+     Expected : 201
+     Actual   : 404
+     Response : {"message":"Cannot POST /attempts//submit","error":"Not Found","statusCode":404} 
+
+  #39  Complete attempt
+     Module   : Analytics & Results
+     Endpoint : POST /attempts/:id/submit-test
+     Expected : 200
+     Actual   : 404
+     Response : {"message":"Cannot POST /attempts//submit-test","error":"Not Found","statusCode":404} 
+
+  #40    has totalScore (field: totalScore)
+     Module   : Analytics & Results
+     Endpoint : POST /attempts/:id/submit-test
+     Expected : present
+     Actual   : missing
+     Response : {"message":"Cannot POST /attempts//submit-test","error":"Not Found","statusCode":404} 
+
+  #41    has accuracy (field: accuracy)
+     Module   : Analytics & Results
+     Endpoint : POST /attempts/:id/submit-test
+     Expected : present
+     Actual   : missing
+     Response : {"message":"Cannot POST /attempts//submit-test","error":"Not Found","statusCode":404} 
+
+  #42    has riskRatio (field: riskRatio)
+     Module   : Analytics & Results
+     Endpoint : POST /attempts/:id/submit-test
+     Expected : present
+     Actual   : missing
+     Response : {"message":"Cannot POST /attempts//submit-test","error":"Not Found","statusCode":404} 
+
+  #43    has percentile (field: percentile)
+     Module   : Analytics & Results
+     Endpoint : POST /attempts/:id/submit-test
+     Expected : present
+     Actual   : missing
+     Response : {"message":"Cannot POST /attempts//submit-test","error":"Not Found","statusCode":404} 
+
+  #44    status COMPLETED
+     Module   : Analytics & Results
+     Endpoint : POST /attempts/:id/submit-test
+     Expected : contains '"status":"COMPLETED"'
+     Actual   : not found
+     Response : {"message":"Cannot POST /attempts//submit-test","error":"Not Found","statusCode":404} 
+
+  #45    has overallAccuracy (field: overallAccuracy)
+     Module   : Analytics & Results
+     Endpoint : GET /analytics/exam/:examId
+     Expected : present
+     Actual   : missing
+     Response :  
+
+  #46    has averageScore (field: averageScore)
+     Module   : Analytics & Results
+     Endpoint : GET /analytics/exam/:examId
+     Expected : present
+     Actual   : missing
+     Response :  
+
+  #47    has riskRatio (field: riskRatio)
+     Module   : Analytics & Results
+     Endpoint : GET /analytics/exam/:examId
+     Expected : present
+     Actual   : missing
+     Response :  
+
+  #48    has riskClassification (field: riskClassification)
+     Module   : Analytics & Results
+     Endpoint : GET /analytics/exam/:examId
+     Expected : present
+     Actual   : missing
+     Response :  
+
+  #49    has inefficiencyIndex (field: inefficiencyIndex)
+     Module   : Analytics & Results
+     Endpoint : GET /analytics/exam/:examId
+     Expected : present
+     Actual   : missing
+     Response :  
+
+  #50    has totalAttempts (field: totalAttempts)
+     Module   : Analytics & Results
+     Endpoint : GET /analytics/exam/:examId
+     Expected : present
+     Actual   : missing
+     Response :  
+
+  #51    totalAttempts is 1
+     Module   : Analytics & Results
+     Endpoint : GET /analytics/exam/:examId
+     Expected : contains '"totalAttempts":1'
+     Actual   : not found
+     Response :  
+
+  #52    has accuracy (field: accuracy)
+     Module   : Analytics & Results
+     Endpoint : GET /analytics/exam/:examId/subjects
+     Expected : present
+     Actual   : missing
+     Response : [] 
+
+  #53    has subject (field: subject)
+     Module   : Analytics & Results
+     Endpoint : GET /analytics/exam/:examId/subjects
+     Expected : present
+     Actual   : missing
+     Response : [] 
+
+  #54    has healthStatus (field: healthStatus)
+     Module   : Analytics & Results
+     Endpoint : GET /analytics/exam/:examId/topics
+     Expected : present
+     Actual   : missing
+     Response : [] 
+
+  #55    has easyAccuracy (field: easyAccuracy)
+     Module   : Analytics & Results
+     Endpoint : GET /analytics/exam/:examId/topics
+     Expected : present
+     Actual   : missing
+     Response : [] 
+
+  #56    has consistencyScore (field: consistencyScore)
+     Module   : Analytics & Results
+     Endpoint : GET /analytics/exam/:examId/topics
+     Expected : present
+     Actual   : missing
+     Response : [] 
+
+  #57    has negativeRate (field: negativeRate)
+     Module   : Analytics & Results
+     Endpoint : GET /analytics/exam/:examId/topics
+     Expected : present
+     Actual   : missing
+     Response : [] 
+
+  #58    has attemptId (field: attemptId)
+     Module   : Analytics & Results
+     Endpoint : GET /analytics/exam/:examId/trend
+     Expected : present
+     Actual   : missing
+     Response : [] 
+
+  #59    has score (field: score)
+     Module   : Analytics & Results
+     Endpoint : GET /analytics/exam/:examId/trend
+     Expected : present
+     Actual   : missing
+     Response : [] 
+
+  #60    has accuracy (field: accuracy)
+     Module   : Analytics & Results
+     Endpoint : GET /analytics/exam/:examId/trend
+     Expected : present
+     Actual   : missing
+     Response : [] 
+
+  #61    UserA has percentile (field: percentile)
+     Module   : Analytics & Results
+     Endpoint : POST /attempts/:id/submit-test
+     Expected : present
+     Actual   : missing
+     Response : {"message":"Cannot POST /attempts//submit-test","error":"Not Found","statusCode":404} 
+
+  #62    UserA has userRank (field: userRank)
+     Module   : Analytics & Results
+     Endpoint : POST /attempts/:id/submit-test
+     Expected : present
+     Actual   : missing
+     Response : {"message":"Cannot POST /attempts//submit-test","error":"Not Found","statusCode":404} 
+
+  #63    UserB has percentile (field: percentile)
+     Module   : Analytics & Results
+     Endpoint : POST /attempts/:id/submit-test
+     Expected : present
+     Actual   : missing
+     Response : {"message":"Cannot POST /attempts//submit-test","error":"Not Found","statusCode":404} 
+
+  #64    UserB has userRank (field: userRank)
+     Module   : Analytics & Results
+     Endpoint : POST /attempts/:id/submit-test
+     Expected : present
+     Actual   : missing
+     Response : {"message":"Cannot POST /attempts//submit-test","error":"Not Found","statusCode":404} 
+
+  #65    UserC has percentile (field: percentile)
+     Module   : Analytics & Results
+     Endpoint : POST /attempts/:id/submit-test
+     Expected : present
+     Actual   : missing
+     Response : {"message":"Cannot POST /attempts//submit-test","error":"Not Found","statusCode":404} 
+
+  #66    UserC has userRank (field: userRank)
+     Module   : Analytics & Results
+     Endpoint : POST /attempts/:id/submit-test
+     Expected : present
+     Actual   : missing
+     Response : {"message":"Cannot POST /attempts//submit-test","error":"Not Found","statusCode":404} 
+
+  #67    TIE user has userRank (field: userRank)
+     Module   : Analytics & Results
+     Endpoint : POST /attempts/:id/submit-test
+     Expected : present
+     Actual   : missing
+     Response : {"message":"Cannot POST /attempts//submit-test","error":"Not Found","statusCode":404} 
+
+  #68  Attempt 1 completed
+     Module   : Analytics & Results
+     Endpoint : POST /attempts
+     Expected : 200
+     Actual   : 404
+     Response : {"message":"Cannot POST /attempts//submit-test","error":"Not Found","statusCode":404} 
+
+  #69    totalAttempts = 1
+     Module   : Analytics & Results
+     Endpoint : POST /attempts
+     Expected : contains '"totalAttempts":1'
+     Actual   : not found
+     Response :  
+
+  #70  Attempt 2 completed
+     Module   : Analytics & Results
+     Endpoint : POST /attempts
+     Expected : 200
+     Actual   : 404
+     Response : {"message":"Cannot POST /attempts//submit-test","error":"Not Found","statusCode":404} 
+
+  #71    totalAttempts = 2
+     Module   : Analytics & Results
+     Endpoint : GET /analytics/exam/:examId
+     Expected : contains '"totalAttempts":2'
+     Actual   : not found
+     Response :  
+
+  #72    has averageScore (field: averageScore)
+     Module   : Analytics & Results
+     Endpoint : GET /analytics/exam/:examId
+     Expected : present
+     Actual   : missing
+     Response :  
+
+  #73    has overallAccuracy (field: overallAccuracy)
+     Module   : Analytics & Results
+     Endpoint : GET /analytics/exam/:examId
+     Expected : present
+     Actual   : missing
+     Response :  
+
+  #74    has riskRatio (field: riskRatio)
+     Module   : Analytics & Results
+     Endpoint : GET /analytics/exam/:examId
+     Expected : present
+     Actual   : missing
+     Response :  
+
+  #75    has accuracy (field: accuracy)
+     Module   : Analytics & Results
+     Endpoint : GET /analytics/exam/:examId/subjects
+     Expected : present
+     Actual   : missing
+     Response : [] 
+
+  #76    has subject (field: subject)
+     Module   : Analytics & Results
+     Endpoint : GET /analytics/exam/:examId/subjects
+     Expected : present
+     Actual   : missing
+     Response : [] 
+
+  #77    response is structured (field: exam)
+     Module   : Analytics & Results
+     Endpoint : GET /analytics/exam/:examId
+     Expected : present
+     Actual   : missing
+     Response :  
+
+  #78  Complete attempt (atomic)
+     Module   : Data Integrity & Constraints
+     Endpoint : POST /attempts/:id/submit-test
+     Expected : 200
+     Actual   : 404
+     Response : {"message":"Cannot POST /attempts//submit-test","error":"Not Found","statusCode":404} 
+
+  #79    grading.totalScore present (field: totalScore)
+     Module   : Data Integrity & Constraints
+     Endpoint : POST /attempts/:id/submit-test
+     Expected : present
+     Actual   : missing
+     Response : {"message":"Cannot POST /attempts//submit-test","error":"Not Found","statusCode":404} 
+
+  #80    grading.accuracy present (field: accuracy)
+     Module   : Data Integrity & Constraints
+     Endpoint : POST /attempts/:id/submit-test
+     Expected : present
+     Actual   : missing
+     Response : {"message":"Cannot POST /attempts//submit-test","error":"Not Found","statusCode":404} 
+
+  #81    grading.riskRatio present (field: riskRatio)
+     Module   : Data Integrity & Constraints
+     Endpoint : POST /attempts/:id/submit-test
+     Expected : present
+     Actual   : missing
+     Response : {"message":"Cannot POST /attempts//submit-test","error":"Not Found","statusCode":404} 
+
+  #82    grading.percentile present (field: percentile)
+     Module   : Data Integrity & Constraints
+     Endpoint : POST /attempts/:id/submit-test
+     Expected : present
+     Actual   : missing
+     Response : {"message":"Cannot POST /attempts//submit-test","error":"Not Found","statusCode":404} 
+
+  #83    grading.userRank present (field: userRank)
+     Module   : Data Integrity & Constraints
+     Endpoint : POST /attempts/:id/submit-test
+     Expected : present
+     Actual   : missing
+     Response : {"message":"Cannot POST /attempts//submit-test","error":"Not Found","statusCode":404} 
+
+  #84    attempt status is COMPLETED
+     Module   : Data Integrity & Constraints
+     Endpoint : POST /attempts/:id/submit-test
+     Expected : contains '"status":"COMPLETED"'
+     Actual   : not found
+     Response : {"message":"Cannot POST /attempts//submit-test","error":"Not Found","statusCode":404} 
+
+  #85    analytics.overallAccuracy present (atomic write) (field: overallAccuracy)
+     Module   : Data Integrity & Constraints
+     Endpoint : GET /analytics/exam/:examId
+     Expected : present
+     Actual   : missing
+     Response :  
+
+  #86    analytics.averageScore present (atomic write) (field: averageScore)
+     Module   : Data Integrity & Constraints
+     Endpoint : GET /analytics/exam/:examId
+     Expected : present
+     Actual   : missing
+     Response :  
+
+  #87    analytics.riskRatio present (atomic write) (field: riskRatio)
+     Module   : Data Integrity & Constraints
+     Endpoint : GET /analytics/exam/:examId
+     Expected : present
+     Actual   : missing
+     Response :  
+
+  #88    analytics.totalAttempts present (atomic write) (field: totalAttempts)
+     Module   : Data Integrity & Constraints
+     Endpoint : GET /analytics/exam/:examId
+     Expected : present
+     Actual   : missing
+     Response :  
+
+  #89  GET attempt after grading
+     Module   : Data Integrity & Constraints
+     Endpoint : GET /attempts/:id
+     Expected : 200
+     Actual   : 404
+     Response : {"message":"Cannot GET /attempts/","error":"Not Found","statusCode":404} 
+
+  #90    attempt.status is COMPLETED
+     Module   : Data Integrity & Constraints
+     Endpoint : GET /attempts/:id
+     Expected : contains '"status":"COMPLETED"'
+     Actual   : not found
+     Response : {"message":"Cannot GET /attempts/","error":"Not Found","statusCode":404} 
+
+  #91    attempt persists totalScore (field: totalScore)
+     Module   : Data Integrity & Constraints
+     Endpoint : GET /attempts/:id
+     Expected : present
+     Actual   : missing
+     Response : {"message":"Cannot GET /attempts/","error":"Not Found","statusCode":404} 
+
+  #92    subject entry has accuracy (field: accuracy)
+     Module   : Data Integrity & Constraints
+     Endpoint : GET /analytics/exam/:examId/subjects
+     Expected : present
+     Actual   : missing
+     Response : [] 
+
+  #93    topic entry has healthStatus (field: healthStatus)
+     Module   : Data Integrity & Constraints
+     Endpoint : GET /analytics/exam/:examId/topics
+     Expected : present
+     Actual   : missing
+     Response : [] 
+
+  #94    topic entry has consistencyScore (field: consistencyScore)
+     Module   : Data Integrity & Constraints
+     Endpoint : GET /analytics/exam/:examId/topics
+     Expected : present
+     Actual   : missing
+     Response : [] 
+
+  #95    trend has attemptId (field: attemptId)
+     Module   : Data Integrity & Constraints
+     Endpoint : GET /analytics/exam/:examId/trend
+     Expected : present
+     Actual   : missing
+     Response : [] 
+
+  #96    trend has score (field: score)
+     Module   : Data Integrity & Constraints
+     Endpoint : GET /analytics/exam/:examId/trend
+     Expected : present
+     Actual   : missing
+     Response : [] 
+
+  #97  Delete snapshotted question allowed
+     Module   : Data Integrity & Constraints
+     Endpoint : DELETE /questions/:id
+     Expected : 400/409 or 404/405
+     Actual   : 200
+     Response : question snapshot delete not protected
+
+  #98  Delete test with attempts allowed
+     Module   : Data Integrity & Constraints
+     Endpoint : DELETE /tests/:id
+     Expected : 400/409 or 404/405
+     Actual   : 200
+     Response : test with attempts delete not protected
+
+    ✘  98 TEST(S) FAILED  

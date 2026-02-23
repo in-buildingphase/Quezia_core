@@ -48,6 +48,20 @@ export class TestController {
         return this.testService.archiveTest(id, user.role);
     }
 
+    /**
+     * DELETE /tests/:id
+     * Permanently delete a test. Rejected with 400 if any attempts exist.
+     */
+    @Delete(':id')
+    @UseGuards(RolesGuard)
+    @Roles('admin')
+    async deleteTest(
+        @Param('id') id: string,
+        @CurrentUser() user: { role: UserRole },
+    ) {
+        return this.testService.deleteTest(id, user.role);
+    }
+
     // ─── Test Details ────────────────────────────────────────────────────────
 
     @Get(':id')

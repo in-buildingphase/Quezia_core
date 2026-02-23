@@ -1,5 +1,6 @@
 import {
     Controller,
+    Delete,
     Post,
     Get,
     Param,
@@ -63,5 +64,18 @@ export class QuestionController {
     async validateQuestion(@Body() body: QuestionPayload) {
         this.validator.validateFull(body);
         return { valid: true, questionId: body.questionId, questionType: body.questionType };
+    }
+
+    /**
+     * DELETE /questions/:questionId
+     * Remove a canonical question from the registry.
+     * Rejected with 400 if the question is snapshotted in any existing test.
+     */
+    @Delete(':questionId')
+    @UseGuards(RolesGuard)
+    @Roles('admin')
+    @HttpCode(HttpStatus.OK)
+    async deleteQuestion(@Param('questionId') questionId: string) {
+        return this.questionService.deleteCanonicalQuestion(questionId);
     }
 }

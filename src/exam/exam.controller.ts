@@ -1,7 +1,10 @@
 import {
     Body,
     Controller,
+    Delete,
     Get,
+    HttpCode,
+    HttpStatus,
     Param,
     Patch,
     Post,
@@ -49,6 +52,28 @@ export class ExamController {
     @Roles('admin')
     updateExam(@Param('id') id: string, @Body() dto: UpdateExamDto) {
         return this.examService.updateExam(id, dto);
+    }
+
+    /**
+     * DELETE /exams/:id
+     * Permanently removes an exam. Rejected with 400 if any tests reference it.
+     */
+    @Delete(':id')
+    @Roles('admin')
+    @HttpCode(HttpStatus.OK)
+    deleteExam(@Param('id') id: string) {
+        return this.examService.deleteExam(id);
+    }
+
+    /**
+     * DELETE /exams/blueprints/:id
+     * Permanently removes a blueprint. Rejected with 400 if any tests reference it.
+     */
+    @Delete('blueprints/:id')
+    @Roles('admin')
+    @HttpCode(HttpStatus.OK)
+    deleteBlueprint(@Param('id') id: string) {
+        return this.examService.deleteBlueprint(id);
     }
 
     // -------------------------------------------------------
