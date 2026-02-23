@@ -12,9 +12,10 @@ import { TestLifecycleService } from './services/test-lifecycle.service';
 import { TestQuestionInjectionService } from './services/test-question-injection.service';
 import { QuestionModule } from '../question/question.module';
 import { ResultModule } from '../result/result.module';
+import { SubscriptionModule } from '../subscription/subscription.module';
 
 @Module({
-    imports: [PrismaModule, ExamModule, AuthModule, QuestionModule, ResultModule],
+    imports: [PrismaModule, ExamModule, AuthModule, QuestionModule, ResultModule, SubscriptionModule],
     controllers: [TestThreadController, TestGenerationController, TestController, AttemptController],
     providers: [
         TestService,

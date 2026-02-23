@@ -18,6 +18,14 @@ import { SubmitAnswerDto } from '../dto/submit-answer.dto';
 export class AttemptController {
   constructor(private readonly testLifecycleService: TestLifecycleService) {}
 
+  @Get(':id')
+  async getAttempt(
+    @Param('id') attemptId: string,
+    @CurrentUser() user: { userId: string },
+  ) {
+    return this.testLifecycleService.getAttemptById(attemptId, user.userId);
+  }
+
   @Post(':testId/start')
   async startAttempt(
     @Param('testId') testId: string,

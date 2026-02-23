@@ -153,10 +153,17 @@ export class TestQuestionInjectionService {
         if (!test) throw new NotFoundException(`Test "${testId}" not found`);
         this.assertOwnership(test.thread.createdByUserId, userId, role);
 
-        return this.prisma.testQuestion.findMany({
+        const questions = await this.prisma.testQuestion.findMany({
             where: { testId },
             orderBy: { sequence: 'asc' },
         });
+
+        // Expose stored snapshot as `contentPayload` to match the Question
+        // registry field name used across the API contract.
+        return questions.map(({ contentSnapshot, ...rest }) => ({
+            ...rest,
+            contentPayload: contentSnapshot,
+        }));
     }
 
     // ─────────────────────────────────────────────────────────────────────────

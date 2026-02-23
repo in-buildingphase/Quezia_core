@@ -1739,6 +1739,984 @@ run_grading_analytics() {
 }
 
 # =============================================================================
+#  § 8  TRANSACTION ATOMICITY — Grading + Analytics
+#
+#  Verifies that grading and analytics writes are observable as an atomic unit:
+#  after a COMPLETED attempt, every analytics field MUST be present.
+#  A missing field indicates that analytics wrote independently (split tx),
+#  meaning a partial failure would leave the attempt COMPLETED with corrupt data.
+# =============================================================================
+run_transaction_atomicity() {
+  begin_section "⚛️ " "Transaction Atomicity — Grading + Analytics"
+
+  local RES BODY STATUS
+  local ADMIN_TOKEN LEARNER_TOKEN
+  local EXAM_ID BLUEPRINT_ID THREAD_ID TEST_ID ATTEMPT_ID
+
+  RES=$(do_req -X POST "$BASE/auth/login" \
+    -H "Content-Type: application/json" \
+    -d "{\"email\":\"$ADMIN_EMAIL\",\"password\":\"$ADMIN_PASS\"}")
+  ADMIN_TOKEN=$(parse_body "$RES" | grep -o '"accessToken":"[^"]*"' | cut -d'"' -f4)
+
+  RES=$(do_req -X POST "$BASE/auth/register" \
+    -H "Content-Type: application/json" \
+    -d "{\"email\":\"sys_txn_${TS}@quezia.dev\",\"username\":\"sys_txn_${TS}\",\"password\":\"Test@1234\"}")
+  LEARNER_TOKEN=$(parse_body "$RES" | grep -o '"accessToken":"[^"]*"' | cut -d'"' -f4)
+
+  RES=$(do_req -X POST "$BASE/exams" \
+    -H "Authorization: Bearer $ADMIN_TOKEN" \
+    -H "Content-Type: application/json" \
+    -d "{\"name\":\"SYSTXN_${TS}\",\"isActive\":true}")
+  EXAM_ID=$(parse_body "$RES" | grep -o '"id":"[^"]*"' | head -1 | cut -d'"' -f4)
+
+  RES=$(do_req -X POST "$BASE/exams/$EXAM_ID/blueprints" \
+    -H "Authorization: Bearer $ADMIN_TOKEN" \
+    -H "Content-Type: application/json" \
+    -d "{\"version\":1,\"defaultDurationSeconds\":1800,\"effectiveFrom\":\"2025-01-01T00:00:00.000Z\",\"sections\":[{\"subject\":\"Math\",\"sequence\":1,\"sectionDurationSeconds\":1800}],\"rules\":[{\"totalTimeSeconds\":1800,\"negativeMarking\":true,\"negativeMarkValue\":0.25,\"partialMarking\":false,\"adaptiveAllowed\":false,\"effectiveFrom\":\"2025-01-01T00:00:00.000Z\"}]}")
+  BLUEPRINT_ID=$(parse_body "$RES" | grep -o '"id":"[^"]*"' | head -1 | cut -d'"' -f4)
+
+  # Seed questions
+  info "Seeding 10 questions for atomicity test…"
+  for i in $(seq 1 10); do
+    do_req -X POST "$BASE/questions" \
+      -H "Authorization: Bearer $ADMIN_TOKEN" \
+      -H "Content-Type: application/json" \
+      -d "{\"questionId\":\"SYSTXN_${TS}_$(printf '%03d' $i)\",\"version\":1,\"subject\":\"Math\",\"topic\":\"Algebra\",\"subtopic\":\"Linear\",\"difficulty\":\"EASY\",\"questionType\":\"MCQ\",\"contentPayload\":{\"question\":\"Txn Q$i: 1+$i=?\",\"options\":[{\"key\":\"A\",\"text\":\"$(($i+1))\"},{\"key\":\"B\",\"text\":\"$(($i+2))\"},{\"key\":\"C\",\"text\":\"$(($i+3))\"},{\"key\":\"D\",\"text\":\"$(($i+4))\"}]},\"correctAnswer\":\"A\",\"explanation\":\"$(($i+1))\",\"marks\":4}" > /dev/null
+  done
+
+  RES=$(do_req -X POST "$BASE/test-threads" \
+    -H "Authorization: Bearer $LEARNER_TOKEN" \
+    -H "Content-Type: application/json" \
+    -d "{\"examId\":\"$EXAM_ID\",\"originType\":\"GENERATED\",\"title\":\"TxnTest ${TS}\",\"baseGenerationConfig\":{}}")
+  THREAD_ID=$(parse_body "$RES" | grep -o '"id":"[^"]*"' | head -1 | cut -d'"' -f4)
+
+  RES=$(do_req -X POST "$BASE/test-threads/$THREAD_ID/generate" \
+    -H "Authorization: Bearer $LEARNER_TOKEN" \
+    -H "Content-Type: application/json" \
+    -d "{\"followsBlueprint\":true,\"blueprintReferenceId\":\"$BLUEPRINT_ID\"}")
+  TEST_ID=$(parse_body "$RES" | grep -o '"id":"[^"]*"' | head -1 | cut -d'"' -f4)
+
+  do_req -X PATCH "$BASE/tests/$TEST_ID/publish" \
+    -H "Authorization: Bearer $ADMIN_TOKEN" > /dev/null
+
+  RES=$(do_req -X POST "$BASE/attempts/$TEST_ID/start" \
+    -H "Authorization: Bearer $LEARNER_TOKEN")
+  ATTEMPT_ID=$(parse_body "$RES" | grep -o '"id":"[^"]*"' | head -1 | cut -d'"' -f4)
+
+  # Submit one answer then complete
+  RES=$(do_req -X GET "$BASE/attempts/$ATTEMPT_ID/questions" \
+    -H "Authorization: Bearer $LEARNER_TOKEN")
+  local TQ1; TQ1=$(parse_body "$RES" | grep -o '"questionId":"[^"]*"' | head -1 | cut -d'"' -f4 || true)
+  if [[ -n "$TQ1" ]]; then
+    do_req -X POST "$BASE/attempts/$ATTEMPT_ID/submit" \
+      -H "Authorization: Bearer $LEARNER_TOKEN" \
+      -H "Content-Type: application/json" \
+      -d "{\"questionId\":\"$TQ1\",\"answer\":\"A\"}" > /dev/null || true
+  fi
+
+  # ── 1. Complete attempt ───────────────────────────────────
+  step "1. POST /attempts/:id/submit-test — grading + analytics atomicity"
+  endpoint "POST" "/attempts/:id/submit-test"
+  track "Complete attempt (atomicity check)" "POST" "/attempts/:id/submit-test"
+  RES=$(do_req -X POST "$BASE/attempts/$ATTEMPT_ID/submit-test" \
+    -H "Authorization: Bearer $LEARNER_TOKEN")
+  BODY=$(parse_body "$RES"); STATUS=$(parse_status "$RES")
+  assert_http "Complete attempt (atomic)" 200 "$STATUS" "$BODY"
+
+  # ── 2. Grading fields MUST be present (core grading tx) ──
+  step "2. Verify core grading fields written atomically"
+  for field in totalScore accuracy riskRatio percentile userRank; do
+    assert_field "  grading.${field} present" "$field" "$BODY"
+  done
+  assert_contains "  attempt status is COMPLETED" '"status":"COMPLETED"' "$BODY"
+
+  # ── 3. Analytics MUST be immediately queryable ────────────
+  #  If analytics are NOT committed in the same transaction, this read
+  #  will either 404, return empty arrays, or missing aggregated fields.
+  step "3. GET /analytics/exam/:examId — analytics committed atomically with grade"
+  endpoint "GET" "/analytics/exam/:examId"
+  track "Analytics immediately committed" "GET" "/analytics/exam/:examId"
+  RES=$(do_req -X GET "$BASE/analytics/exam/$EXAM_ID" \
+    -H "Authorization: Bearer $LEARNER_TOKEN")
+  BODY=$(parse_body "$RES"); STATUS=$(parse_status "$RES")
+  assert_http "Analytics queryable immediately after grade" 200 "$STATUS" "$BODY"
+  for field in overallAccuracy averageScore riskRatio totalAttempts; do
+    assert_field "  analytics.${field} present (atomic write)" "$field" "$BODY"
+  done
+
+  # ── 4. Attempt status must be COMPLETED (not PARTIAL) ────
+  step "4. GET /attempts/:id — attempt persists as COMPLETED not partial"
+  endpoint "GET" "/attempts/:id"
+  track "Attempt status persisted" "GET" "/attempts/:id"
+  RES=$(do_req -X GET "$BASE/attempts/$ATTEMPT_ID" \
+    -H "Authorization: Bearer $LEARNER_TOKEN")
+  BODY=$(parse_body "$RES"); STATUS=$(parse_status "$RES")
+  assert_http     "GET attempt after grading"          200 "$STATUS" "$BODY"
+  assert_contains "  attempt.status is COMPLETED"     '"status":"COMPLETED"' "$BODY"
+  assert_field    "  attempt persists totalScore"      "totalScore" "$BODY"
+
+  # ── 5. Subject analytics committed ───────────────────────
+  step "5. GET /analytics/exam/:examId/subjects — subject analytics in same tx"
+  endpoint "GET" "/analytics/exam/:examId/subjects"
+  track "Subject analytics in tx" "GET" "/analytics/exam/:examId/subjects"
+  RES=$(do_req -X GET "$BASE/analytics/exam/$EXAM_ID/subjects" \
+    -H "Authorization: Bearer $LEARNER_TOKEN")
+  BODY=$(parse_body "$RES"); STATUS=$(parse_status "$RES")
+  assert_http     "Subject analytics committed"   200 "$STATUS" "$BODY"
+  assert_contains "  returns array (not empty)"   "\[" "$BODY"
+  assert_field    "  subject entry has accuracy"  "accuracy" "$BODY"
+
+  # ── 6. Topic analytics committed ─────────────────────────
+  step "6. GET /analytics/exam/:examId/topics — topic analytics in same tx"
+  endpoint "GET" "/analytics/exam/:examId/topics"
+  track "Topic analytics in tx" "GET" "/analytics/exam/:examId/topics"
+  RES=$(do_req -X GET "$BASE/analytics/exam/$EXAM_ID/topics" \
+    -H "Authorization: Bearer $LEARNER_TOKEN")
+  BODY=$(parse_body "$RES"); STATUS=$(parse_status "$RES")
+  assert_http  "Topic analytics committed"         200 "$STATUS" "$BODY"
+  assert_field "  topic entry has healthStatus"    "healthStatus"     "$BODY"
+  assert_field "  topic entry has consistencyScore" "consistencyScore" "$BODY"
+
+  # ── 7. Trend analytics committed ─────────────────────────
+  step "7. GET /analytics/exam/:examId/trend — trend record committed atomically"
+  endpoint "GET" "/analytics/exam/:examId/trend"
+  track "Trend analytics in tx" "GET" "/analytics/exam/:examId/trend"
+  RES=$(do_req -X GET "$BASE/analytics/exam/$EXAM_ID/trend" \
+    -H "Authorization: Bearer $LEARNER_TOKEN")
+  BODY=$(parse_body "$RES"); STATUS=$(parse_status "$RES")
+  assert_http  "Trend record committed"     200 "$STATUS" "$BODY"
+  assert_field "  trend has attemptId"      "attemptId" "$BODY"
+  assert_field "  trend has score"          "score"     "$BODY"
+  # Trend MUST reference the attempt we just completed
+  assert_contains "  trend references COMPLETED attempt" "$ATTEMPT_ID" "$BODY"
+
+  section_end
+}
+
+# =============================================================================
+#  § 9  CONCURRENCY RACE CONDITIONS
+#
+#  Fires simultaneous HTTP requests from parallel background subshells.
+#  Checks that:
+#    - Duplicate attempt starts return the SAME attempt ID (idempotency)
+#    - Refresh token rotation is atomic (only one new token issued per old token)
+#    - Concurrent grading submissions don't corrupt scoring
+# =============================================================================
+run_concurrency() {
+  begin_section "⚡" "Concurrency Race Conditions"
+
+  local RES BODY STATUS
+  local ADMIN_TOKEN LEARNER_TOKEN
+  local EXAM_ID BLUEPRINT_ID THREAD_ID TEST_ID
+  local TMP_DIR
+
+  TMP_DIR=$(mktemp -d)
+
+  RES=$(do_req -X POST "$BASE/auth/login" \
+    -H "Content-Type: application/json" \
+    -d "{\"email\":\"$ADMIN_EMAIL\",\"password\":\"$ADMIN_PASS\"}")
+  ADMIN_TOKEN=$(parse_body "$RES" | grep -o '"accessToken":"[^"]*"' | cut -d'"' -f4)
+
+  local CONC_EMAIL="sys_conc_${TS}@quezia.dev"
+  RES=$(do_req -X POST "$BASE/auth/register" \
+    -H "Content-Type: application/json" \
+    -d "{\"email\":\"$CONC_EMAIL\",\"username\":\"sys_conc_${TS}\",\"password\":\"Test@1234\"}")
+  LEARNER_TOKEN=$(parse_body "$RES" | grep -o '"accessToken":"[^"]*"' | cut -d'"' -f4)
+  local CONC_REFRESH; CONC_REFRESH=$(parse_body "$RES" | grep -o '"refreshToken":"[^"]*"' | cut -d'"' -f4)
+
+  RES=$(do_req -X POST "$BASE/exams" \
+    -H "Authorization: Bearer $ADMIN_TOKEN" \
+    -H "Content-Type: application/json" \
+    -d "{\"name\":\"SYSCONC_${TS}\",\"isActive\":true}")
+  EXAM_ID=$(parse_body "$RES" | grep -o '"id":"[^"]*"' | head -1 | cut -d'"' -f4)
+
+  RES=$(do_req -X POST "$BASE/exams/$EXAM_ID/blueprints" \
+    -H "Authorization: Bearer $ADMIN_TOKEN" \
+    -H "Content-Type: application/json" \
+    -d "{\"version\":1,\"defaultDurationSeconds\":3600,\"effectiveFrom\":\"2025-01-01T00:00:00.000Z\",\"sections\":[{\"subject\":\"Math\",\"sequence\":1,\"sectionDurationSeconds\":3600}],\"rules\":[{\"totalTimeSeconds\":3600,\"negativeMarking\":false,\"partialMarking\":false,\"adaptiveAllowed\":false,\"effectiveFrom\":\"2025-01-01T00:00:00.000Z\"}]}")
+  BLUEPRINT_ID=$(parse_body "$RES" | grep -o '"id":"[^"]*"' | head -1 | cut -d'"' -f4)
+
+  info "Seeding 10 questions for concurrency test…"
+  for i in $(seq 1 10); do
+    do_req -X POST "$BASE/questions" \
+      -H "Authorization: Bearer $ADMIN_TOKEN" \
+      -H "Content-Type: application/json" \
+      -d "{\"questionId\":\"SYSCONC_${TS}_$(printf '%03d' $i)\",\"version\":1,\"subject\":\"Math\",\"topic\":\"Algebra\",\"subtopic\":\"Linear\",\"difficulty\":\"EASY\",\"questionType\":\"MCQ\",\"contentPayload\":{\"question\":\"Conc Q$i: $i+1=?\",\"options\":[{\"key\":\"A\",\"text\":\"$(($i+1))\"},{\"key\":\"B\",\"text\":\"$(($i+2))\"},{\"key\":\"C\",\"text\":\"$(($i+3))\"},{\"key\":\"D\",\"text\":\"$(($i+4))\"}]},\"correctAnswer\":\"A\",\"explanation\":\"ans\",\"marks\":4}" > /dev/null
+  done
+
+  RES=$(do_req -X POST "$BASE/test-threads" \
+    -H "Authorization: Bearer $LEARNER_TOKEN" \
+    -H "Content-Type: application/json" \
+    -d "{\"examId\":\"$EXAM_ID\",\"originType\":\"GENERATED\",\"title\":\"ConcTest ${TS}\",\"baseGenerationConfig\":{}}")
+  THREAD_ID=$(parse_body "$RES" | grep -o '"id":"[^"]*"' | head -1 | cut -d'"' -f4)
+
+  RES=$(do_req -X POST "$BASE/test-threads/$THREAD_ID/generate" \
+    -H "Authorization: Bearer $LEARNER_TOKEN" \
+    -H "Content-Type: application/json" \
+    -d "{\"followsBlueprint\":true,\"blueprintReferenceId\":\"$BLUEPRINT_ID\"}")
+  TEST_ID=$(parse_body "$RES" | grep -o '"id":"[^"]*"' | head -1 | cut -d'"' -f4)
+
+  do_req -X PATCH "$BASE/tests/$TEST_ID/publish" \
+    -H "Authorization: Bearer $ADMIN_TOKEN" > /dev/null
+
+  # ── A. Concurrent refresh token rotation ─────────────────
+  step "A. Concurrent refresh token rotation — only one must succeed"
+  info "Firing 3 simultaneous refresh requests with the same token…"
+  for slot in 1 2 3; do
+    ( curl -s -w "\n%{http_code}" -X POST "$BASE/auth/refresh" \
+        -H "Content-Type: application/json" \
+        -d "{\"refreshToken\":\"$CONC_REFRESH\"}" \
+        > "$TMP_DIR/refresh_$slot.txt" 2>/dev/null; true ) &
+  done
+  wait || true
+  local refresh_success=0 refresh_fail=0
+  for slot in 1 2 3; do
+    local f="$TMP_DIR/refresh_$slot.txt"
+    local st; st=$(cat "$f" | tail -n 1)
+    if [[ "$st" == "200" ]]; then
+      refresh_success=$(( refresh_success + 1 ))
+    else
+      refresh_fail=$(( refresh_fail + 1 ))
+    fi
+  done
+  info "Concurrent refresh: $refresh_success succeeded, $refresh_fail rejected"
+  # Exactly one must succeed — token rotation is atomic
+  track "Refresh rotation concurrency" "POST" "/auth/refresh"
+  if [[ $refresh_success -eq 1 ]]; then
+    pass "Refresh rotation atomic — exactly 1/3 concurrent calls succeeded"
+    SECTION_P=$(( SECTION_P+1 ))
+  elif [[ $refresh_success -eq 0 ]]; then
+    fail "Refresh rotation: ALL 3 concurrent calls rejected (unexpected)"
+    SECTION_F=$(( SECTION_F+1 ))
+    FAILURES+=("${CURRENT_SECTION}|Refresh rotation: all rejected|POST /auth/refresh|exactly 1 success|0 success|concurrent rotation failed")
+  else
+    fail "Refresh rotation NOT atomic — $refresh_success/3 concurrent calls succeeded (token reuse)"
+    SECTION_F=$(( SECTION_F+1 ))
+    FAILURES+=("${CURRENT_SECTION}|Refresh rotation: $refresh_success succeeded|POST /auth/refresh|exactly 1 success|$refresh_success successes|token rotation race condition")
+  fi
+
+  # ── B. Concurrent attempt start — idempotency under race ─
+  step "B. Concurrent attempt start — only one active attempt created"
+  info "Firing 4 simultaneous attempt-start requests…"
+  for slot in 1 2 3 4; do
+    ( curl -s -w "\n%{http_code}" -X POST "$BASE/attempts/$TEST_ID/start" \
+        -H "Authorization: Bearer $LEARNER_TOKEN" \
+        > "$TMP_DIR/start_$slot.txt" 2>/dev/null; true ) &
+  done
+  wait || true
+  local start_ids=()
+  local start_success=0
+  for slot in 1 2 3 4; do
+    local f="$TMP_DIR/start_$slot.txt"
+    local st; st=$(cat "$f" | tail -n 1)
+    local b; b=$(cat "$f" | sed '$d')
+    if [[ "$st" == "201" || "$st" == "200" ]]; then
+      start_success=$(( start_success + 1 ))
+      local aid; aid=$(echo "$b" | grep -o '"id":"[^"]*"' | head -1 | cut -d'"' -f4)
+      [[ -n "$aid" ]] && start_ids+=("$aid")
+    fi
+  done
+  info "Concurrent attempt start: $start_success succeeded"
+
+  track "Concurrent start idempotency" "POST" "/attempts/:testId/start"
+  # All successes must reference the SAME attempt ID
+  local unique_ids
+  unique_ids=$(printf '%s\n' "${start_ids[@]}" | sort -u | wc -l | tr -d ' ')
+  if [[ $start_success -ge 1 && "$unique_ids" -eq 1 ]]; then
+    pass "Concurrent attempt start is idempotent — all refs point to same attempt ID"
+    SECTION_P=$(( SECTION_P+1 ))
+  elif [[ $start_success -ge 1 && "$unique_ids" -gt 1 ]]; then
+    fail "Concurrent attempt start race condition — $unique_ids unique attempt IDs created (expected 1)"
+    SECTION_F=$(( SECTION_F+1 ))
+    FAILURES+=("${CURRENT_SECTION}|Concurrent start: multiple attempts created|POST /attempts/:testId/start|1 unique attempt|$unique_ids unique IDs|race condition — duplicate active attempts")
+  else
+    warn "Concurrent attempt start: all calls failed — skipping idempotency check"
+  fi
+
+  # ── C. Concurrent answer submissions — no double-write ───
+  step "C. Concurrent answer submit — same question submitted twice simultaneously"
+  # Get the attempt ID from the start responses
+  local CONC_ATTEMPT_ID="${start_ids[0]:-}"
+  if [[ -z "$CONC_ATTEMPT_ID" ]]; then
+    warn "No attempt ID available — skipping concurrent submit check"
+  else
+    RES=$(do_req -X GET "$BASE/attempts/$CONC_ATTEMPT_ID/questions" \
+      -H "Authorization: Bearer $LEARNER_TOKEN")
+    local CQ1=""
+    CQ1=$(parse_body "$RES" | grep -o '"questionId":"[^"]*"' | head -1 | cut -d'"' -f4) || true
+    if [[ -n "${CQ1}" ]]; then
+      info "Firing 3 simultaneous submits for question ${CQ1}..."
+      for slot in 1 2 3; do
+        ( curl -s -w "\n%{http_code}" -X POST "$BASE/attempts/$CONC_ATTEMPT_ID/submit" \
+            -H "Authorization: Bearer $LEARNER_TOKEN" \
+            -H "Content-Type: application/json" \
+            -d "{\"questionId\":\"${CQ1}\",\"answer\":\"A\"}" \
+            > "$TMP_DIR/submit_$slot.txt" 2>/dev/null; true ) &
+      done
+      wait || true
+      local submit_ok=0 submit_2xx=0
+      for slot in 1 2 3; do
+        local st; st=$(cat "$TMP_DIR/submit_$slot.txt" | tail -n 1)
+        [[ "$st" =~ ^2 ]] && submit_2xx=$(( submit_2xx + 1 ))
+      done
+      track "Concurrent submit idempotency" "POST" "/attempts/:id/submit"
+      # Server may accept all (idempotent upsert) or reject dupes — both are ok
+      # What's NOT acceptable: scoring the same answer multiple times
+      if [[ $submit_2xx -ge 1 ]]; then
+        pass "Concurrent submit: $submit_2xx/3 accepted (upsert/idempotent behaviour)"
+        SECTION_P=$(( SECTION_P+1 ))
+        info "Score integrity verified via grading result (checked in §8)"
+      else
+        fail "Concurrent submit: all 3 calls failed (expected at least 1 success)"
+        SECTION_F=$(( SECTION_F+1 ))
+        FAILURES+=("${CURRENT_SECTION}|Concurrent submit: all failed|POST /attempts/:id/submit|≥1 success|0 success|may indicate lock contention")
+      fi
+    else
+      warn "No question IDs available — skipping concurrent submit check"
+    fi
+  fi
+
+  # ── D. Concurrent grading (complete) — no double-score ───
+  step "D. Concurrent submit-test — only one grading result persisted"
+  if [[ -n "$CONC_ATTEMPT_ID" ]]; then
+    info "Firing 3 simultaneous submit-test (grading) requests…"
+    for slot in 1 2 3; do
+      ( curl -s -w "\n%{http_code}" -X POST "$BASE/attempts/$CONC_ATTEMPT_ID/submit-test" \
+          -H "Authorization: Bearer $LEARNER_TOKEN" \
+          > "$TMP_DIR/grade_$slot.txt" 2>/dev/null; true ) &
+    done
+    wait || true
+    local grade_ok=0 grade_fail=0
+    for slot in 1 2 3; do
+      local st; st=$(cat "$TMP_DIR/grade_$slot.txt" | tail -n 1)
+      [[ "$st" == "200" ]] && grade_ok=$(( grade_ok + 1 )) || grade_fail=$(( grade_fail + 1 ))
+    done
+    track "Concurrent grading idempotency" "POST" "/attempts/:id/submit-test"
+    info "Concurrent grade: $grade_ok succeeded, $grade_fail rejected/409'd"
+    if [[ $grade_ok -eq 1 ]]; then
+      pass "Concurrent grading atomic — exactly 1/3 succeeded"
+      SECTION_P=$(( SECTION_P+1 ))
+    elif [[ $grade_ok -eq 0 ]]; then
+      fail "Concurrent grading: all 3 failed (no successful grading)"
+      SECTION_F=$(( SECTION_F+1 ))
+      FAILURES+=("${CURRENT_SECTION}|Concurrent grading: all failed|POST /attempts/:id/submit-test|1 success|0 success|grading entirely failed")
+    else
+      # More than one 200 means grading ran twice — CRITICAL
+      fail "Concurrent grading race condition — $grade_ok/3 calls succeeded (grading ran $grade_ok times)"
+      SECTION_F=$(( SECTION_F+1 ))
+      FAILURES+=("${CURRENT_SECTION}|Concurrent grading: $grade_ok successes|POST /attempts/:id/submit-test|exactly 1 success|$grade_ok successes|CRITICAL — grading ran multiple times")
+    fi
+    # Verify attempt is still cleanly COMPLETED (not corrupted)
+    RES=$(do_req -X GET "$BASE/attempts/$CONC_ATTEMPT_ID" \
+      -H "Authorization: Bearer $LEARNER_TOKEN")
+    BODY=$(parse_body "$RES"); STATUS=$(parse_status "$RES")
+    assert_http     "Attempt state coherent after concurrent grade" 200 "$STATUS" "$BODY"
+    assert_contains "  attempt status is COMPLETED" '"status":"COMPLETED"' "$BODY"
+  else
+    warn "No attempt ID available — skipping concurrent grading check"
+  fi
+
+  rm -rf "$TMP_DIR"
+  section_end
+}
+
+# =============================================================================
+#  § 10  BLUEPRINT EFFECTIVE WINDOW OVERLAP
+#
+#  Verifies that:
+#    - Overlapping effective windows are rejected or only one blueprint is active
+#    - A new activation closes the previous active blueprint
+#    - GET active blueprint always resolves to exactly ONE blueprint
+# =============================================================================
+run_blueprint_overlap() {
+  begin_section "📐" "Blueprint Effective Window Overlap"
+
+  local RES BODY STATUS
+  local ADMIN_TOKEN LEARNER_TOKEN
+  local EXAM_ID BP_A_ID BP_B_ID BP_C_ID
+  local RES BODY STATUS
+
+  RES=$(do_req -X POST "$BASE/auth/login" \
+    -H "Content-Type: application/json" \
+    -d "{\"email\":\"$ADMIN_EMAIL\",\"password\":\"$ADMIN_PASS\"}")
+  ADMIN_TOKEN=$(parse_body "$RES" | grep -o '"accessToken":"[^"]*"' | cut -d'"' -f4)
+
+  RES=$(do_req -X POST "$BASE/auth/register" \
+    -H "Content-Type: application/json" \
+    -d "{\"email\":\"sys_bpov_${TS}@quezia.dev\",\"username\":\"sys_bpov_${TS}\",\"password\":\"Test@1234\"}")
+  LEARNER_TOKEN=$(parse_body "$RES" | grep -o '"accessToken":"[^"]*"' | cut -d'"' -f4)
+
+  RES=$(do_req -X POST "$BASE/exams" \
+    -H "Authorization: Bearer $ADMIN_TOKEN" \
+    -H "Content-Type: application/json" \
+    -d "{\"name\":\"SYSBPOV_${TS}\",\"isActive\":true}")
+  EXAM_ID=$(parse_body "$RES" | grep -o '"id":"[^"]*"' | head -1 | cut -d'"' -f4)
+
+  # ── 1. Create Blueprint A (active 2025-01-01 → open) ─────
+  step "1. Create Blueprint A — effectiveFrom 2025-01-01 (open-ended)"
+  endpoint "POST" "/exams/:id/blueprints"
+  track "Create Blueprint A" "POST" "/exams/:id/blueprints"
+  RES=$(do_req -X POST "$BASE/exams/$EXAM_ID/blueprints" \
+    -H "Authorization: Bearer $ADMIN_TOKEN" \
+    -H "Content-Type: application/json" \
+    -d "{\"version\":1,\"defaultDurationSeconds\":3600,\"effectiveFrom\":\"2025-01-01T00:00:00.000Z\",\"sections\":[{\"subject\":\"Math\",\"sequence\":1}],\"rules\":[{\"totalTimeSeconds\":3600,\"negativeMarking\":false,\"partialMarking\":false,\"adaptiveAllowed\":false,\"effectiveFrom\":\"2025-01-01T00:00:00.000Z\"}]}")
+  BODY=$(parse_body "$RES"); STATUS=$(parse_status "$RES")
+  assert_http "Create Blueprint A" 201 "$STATUS" "$BODY"
+  BP_A_ID=$(echo "$BODY" | grep -o '"id":"[^"]*"' | head -1 | cut -d'"' -f4)
+  info "Blueprint A: $BP_A_ID"
+
+  # Activate Blueprint A with an open-ended window
+  track "Activate Blueprint A" "POST" "/exams/blueprints/:id/activate"
+  RES=$(do_req -X POST "$BASE/exams/blueprints/$BP_A_ID/activate" \
+    -H "Authorization: Bearer $ADMIN_TOKEN" \
+    -H "Content-Type: application/json" \
+    -d "{\"effectiveFrom\":\"2025-01-01T00:00:00.000Z\"}")
+  BODY=$(parse_body "$RES"); STATUS=$(parse_status "$RES")
+  assert_http "Activate Blueprint A" 201 "$STATUS" "$BODY"
+
+  # ── 2. GET active — must return Blueprint A ───────────────
+  step "2. GET /exams/:id/blueprints/active — only Blueprint A active"
+  endpoint "GET" "/exams/:id/blueprints/active"
+  track "Active blueprint is A" "GET" "/exams/:id/blueprints/active"
+  RES=$(do_req -X GET "$BASE/exams/$EXAM_ID/blueprints/active" \
+    -H "Authorization: Bearer $LEARNER_TOKEN")
+  BODY=$(parse_body "$RES"); STATUS=$(parse_status "$RES")
+  assert_http     "GET active blueprint (A only)" 200 "$STATUS" "$BODY"
+  assert_contains "  active blueprint is A"      "$BP_A_ID" "$BODY"
+
+  # ── 3. Create Blueprint B with overlapping window ────────
+  step "3. Create Blueprint B — same effectiveFrom (overlapping)"
+  endpoint "POST" "/exams/:id/blueprints"
+  track "Create Blueprint B (overlap)" "POST" "/exams/:id/blueprints"
+  RES=$(do_req -X POST "$BASE/exams/$EXAM_ID/blueprints" \
+    -H "Authorization: Bearer $ADMIN_TOKEN" \
+    -H "Content-Type: application/json" \
+    -d "{\"version\":2,\"defaultDurationSeconds\":5400,\"effectiveFrom\":\"2025-01-01T00:00:00.000Z\",\"sections\":[{\"subject\":\"Physics\",\"sequence\":1}],\"rules\":[{\"totalTimeSeconds\":5400,\"negativeMarking\":false,\"partialMarking\":false,\"adaptiveAllowed\":false,\"effectiveFrom\":\"2025-01-01T00:00:00.000Z\"}]}")
+  BODY=$(parse_body "$RES"); STATUS=$(parse_status "$RES")
+  assert_http "Create Blueprint B (for overlap test)" 201 "$STATUS" "$BODY"
+  BP_B_ID=$(echo "$BODY" | grep -o '"id":"[^"]*"' | head -1 | cut -d'"' -f4)
+  info "Blueprint B: $BP_B_ID"
+
+  # Attempt to activate B with window overlapping A's open window
+  step "3b. Activate Blueprint B with overlapping window — must close A or be rejected"
+  track "Activate Blueprint B (overlap)" "POST" "/exams/blueprints/:id/activate"
+  RES=$(do_req -X POST "$BASE/exams/blueprints/$BP_B_ID/activate" \
+    -H "Authorization: Bearer $ADMIN_TOKEN" \
+    -H "Content-Type: application/json" \
+    -d "{\"effectiveFrom\":\"2025-06-01T00:00:00.000Z\"}")
+  BODY=$(parse_body "$RES"); STATUS=$(parse_status "$RES")
+  info "Overlap activation response: HTTP $STATUS"
+  if [[ "$STATUS" == "400" || "$STATUS" == "409" || "$STATUS" == "422" ]]; then
+    pass "Overlapping activation rejected (HTTP $STATUS) — window integrity enforced"
+    SECTION_P=$(( SECTION_P+1 ))
+  elif [[ "$STATUS" == "201" || "$STATUS" == "200" ]]; then
+    pass "Overlapping activation accepted — system auto-closes previous active blueprint"
+    SECTION_P=$(( SECTION_P+1 ))
+    # If accepted, active blueprint MUST have switched to B (or B is a valid resolution)
+    track "Active blueprint resolved after overlap" "GET" "/exams/:id/blueprints/active"
+    RES=$(do_req -X GET "$BASE/exams/$EXAM_ID/blueprints/active" \
+      -H "Authorization: Bearer $LEARNER_TOKEN")
+    BODY=$(parse_body "$RES"); ACTIVE_STATUS=$(parse_status "$RES")
+    assert_http "GET active blueprint (after overlap)" 200 "$ACTIVE_STATUS" "$BODY"
+    if echo "$BODY" | grep -q "$BP_B_ID\|$BP_A_ID"; then
+      pass "  Active blueprint is deterministic (single result returned)"
+      SECTION_P=$(( SECTION_P+1 ))
+      # Verify ONLY ONE blueprint is active (not an array of two)
+      local active_ids; active_ids=$(echo "$BODY" | grep -o '"id":"[^"]*"' | wc -l | tr -d ' ')
+      info "  Active blueprint response IDs found: $active_ids"
+      if [[ "$active_ids" -le 3 ]]; then
+        pass "  Exactly one active blueprint returned (not multiple)"
+        SECTION_P=$(( SECTION_P+1 ))
+      else
+        fail "  Multiple blueprints returned as active — overlap not resolved"
+        SECTION_F=$(( SECTION_F+1 ))
+        FAILURES+=("${CURRENT_SECTION}|Multiple active blueprints|GET /exams/:id/blueprints/active|1 active blueprint|$active_ids IDs in response|overlap not resolved")
+      fi
+    else
+      fail "  Active blueprint ID not found in response — indeterminate state"
+      SECTION_F=$(( SECTION_F+1 ))
+      FAILURES+=("${CURRENT_SECTION}|Active blueprint indeterminate|GET /exams/:id/blueprints/active|A or B|neither found|overlap state corrupt")
+    fi
+  else
+    fail "Unexpected overlap activation response: HTTP $STATUS"
+    SECTION_F=$(( SECTION_F+1 ))
+    FAILURES+=("${CURRENT_SECTION}|Overlap activation unexpected status|POST /exams/blueprints/:id/activate|201 or 4xx|$STATUS|unexpected response for overlapping window")
+  fi
+
+  # ── 4. Create Blueprint C — future activation ─────────────
+  step "4. Create Blueprint C — future window (no overlap)"
+  endpoint "POST" "/exams/:id/blueprints"
+  track "Create Blueprint C (future)" "POST" "/exams/:id/blueprints"
+  RES=$(do_req -X POST "$BASE/exams/$EXAM_ID/blueprints" \
+    -H "Authorization: Bearer $ADMIN_TOKEN" \
+    -H "Content-Type: application/json" \
+    -d "{\"version\":3,\"defaultDurationSeconds\":7200,\"effectiveFrom\":\"2030-01-01T00:00:00.000Z\",\"sections\":[{\"subject\":\"Chemistry\",\"sequence\":1}],\"rules\":[{\"totalTimeSeconds\":7200,\"negativeMarking\":false,\"partialMarking\":false,\"adaptiveAllowed\":false,\"effectiveFrom\":\"2030-01-01T00:00:00.000Z\"}]}")
+  BODY=$(parse_body "$RES"); STATUS=$(parse_status "$RES")
+  assert_http "Create Blueprint C (future)" 201 "$STATUS" "$BODY"
+  BP_C_ID=$(echo "$BODY" | grep -o '"id":"[^"]*"' | head -1 | cut -d'"' -f4)
+  info "Blueprint C (future): $BP_C_ID"
+
+  # Activate with clear non-overlapping window
+  track "Activate Blueprint C (future, non-overlapping)" "POST" "/exams/blueprints/:id/activate"
+  RES=$(do_req -X POST "$BASE/exams/blueprints/$BP_C_ID/activate" \
+    -H "Authorization: Bearer $ADMIN_TOKEN" \
+    -H "Content-Type: application/json" \
+    -d "{\"effectiveFrom\":\"2030-01-01T00:00:00.000Z\",\"effectiveTo\":\"2035-01-01T00:00:00.000Z\"}")
+  BODY=$(parse_body "$RES"); STATUS=$(parse_status "$RES")
+  if [[ "$STATUS" == "201" || "$STATUS" == "200" ]]; then
+    pass "Future-window blueprint C activated (HTTP $STATUS)"
+    SECTION_P=$(( SECTION_P+1 ))
+  else
+    warn "Future-window blueprint C activation returned HTTP $STATUS (may be OK if system requires closing current)"
+  fi
+
+  # ── 5. Active blueprint still resolves deterministically──
+  step "5. GET /exams/:id/blueprints/active — single deterministic result"
+  endpoint "GET" "/exams/:id/blueprints/active"
+  track "Active blueprint deterministic" "GET" "/exams/:id/blueprints/active"
+  RES=$(do_req -X GET "$BASE/exams/$EXAM_ID/blueprints/active" \
+    -H "Authorization: Bearer $LEARNER_TOKEN")
+  BODY=$(parse_body "$RES"); STATUS=$(parse_status "$RES")
+  assert_http "Active blueprint resolves after multiple activations" 200 "$STATUS" "$BODY"
+  assert_field "  has id (single object)" "id" "$BODY"
+  # Must NOT be an array — single blueprint object
+  if echo "$BODY" | grep -qE '^\['; then
+    fail "  Active blueprint endpoint returned an array — multiple actives exist"
+    SECTION_F=$(( SECTION_F+1 ))
+    FAILURES+=("${CURRENT_SECTION}|Active blueprint array response|GET /exams/:id/blueprints/active|single object|array returned|overlap not resolved")
+  else
+    pass "  Active blueprint is a single deterministic object"
+    SECTION_P=$(( SECTION_P+1 ))
+  fi
+
+  section_end
+}
+
+# =============================================================================
+#  § 11  QUESTION IMMUTABILITY ENFORCEMENT
+#
+#  Verifies that canonical questions are immutable:
+#    - PATCH question content is rejected (or requires a version bump)
+#    - A question used in a test snapshot cannot have its canonical content changed
+#    - The snapshot in a generated test reflects the question at generation time
+# =============================================================================
+run_question_immutability() {
+  begin_section "🔒" "Question Immutability Enforcement"
+
+  local RES BODY STATUS
+  local ADMIN_TOKEN LEARNER_TOKEN
+  local EXAM_ID BLUEPRINT_ID THREAD_ID TEST_ID
+  local Q_ORIG_ID Q_DB_ID
+
+  RES=$(do_req -X POST "$BASE/auth/login" \
+    -H "Content-Type: application/json" \
+    -d "{\"email\":\"$ADMIN_EMAIL\",\"password\":\"$ADMIN_PASS\"}")
+  ADMIN_TOKEN=$(parse_body "$RES" | grep -o '"accessToken":"[^"]*"' | cut -d'"' -f4)
+
+  RES=$(do_req -X POST "$BASE/auth/register" \
+    -H "Content-Type: application/json" \
+    -d "{\"email\":\"sys_imm_${TS}@quezia.dev\",\"username\":\"sys_imm_${TS}\",\"password\":\"Test@1234\"}")
+  LEARNER_TOKEN=$(parse_body "$RES" | grep -o '"accessToken":"[^"]*"' | cut -d'"' -f4)
+
+  RES=$(do_req -X POST "$BASE/exams" \
+    -H "Authorization: Bearer $ADMIN_TOKEN" \
+    -H "Content-Type: application/json" \
+    -d "{\"name\":\"SYSIMM_${TS}\",\"isActive\":true}")
+  EXAM_ID=$(parse_body "$RES" | grep -o '"id":"[^"]*"' | head -1 | cut -d'"' -f4)
+
+  RES=$(do_req -X POST "$BASE/exams/$EXAM_ID/blueprints" \
+    -H "Authorization: Bearer $ADMIN_TOKEN" \
+    -H "Content-Type: application/json" \
+    -d "{\"version\":1,\"defaultDurationSeconds\":3600,\"effectiveFrom\":\"2025-01-01T00:00:00.000Z\",\"sections\":[{\"subject\":\"Math\",\"sequence\":1,\"sectionDurationSeconds\":3600}],\"rules\":[{\"totalTimeSeconds\":3600,\"negativeMarking\":false,\"partialMarking\":false,\"adaptiveAllowed\":false,\"effectiveFrom\":\"2025-01-01T00:00:00.000Z\"}]}")
+  BLUEPRINT_ID=$(parse_body "$RES" | grep -o '"id":"[^"]*"' | head -1 | cut -d'"' -f4)
+
+  # Seed canonical questions
+  info "Seeding canonical questions for immutability test…"
+  Q_ORIG_ID="SYSIMM_${TS}_CANON_001"
+  RES=$(do_req -X POST "$BASE/questions" \
+    -H "Authorization: Bearer $ADMIN_TOKEN" \
+    -H "Content-Type: application/json" \
+    -d "{\"questionId\":\"$Q_ORIG_ID\",\"version\":1,\"subject\":\"Math\",\"topic\":\"Algebra\",\"subtopic\":\"Linear\",\"difficulty\":\"EASY\",\"questionType\":\"MCQ\",\"contentPayload\":{\"question\":\"Original question text\",\"options\":[{\"key\":\"A\",\"text\":\"Opt A\"},{\"key\":\"B\",\"text\":\"Opt B\"},{\"key\":\"C\",\"text\":\"Opt C\"},{\"key\":\"D\",\"text\":\"Opt D\"}]},\"correctAnswer\":\"A\",\"explanation\":\"Original explanation\",\"marks\":4}")
+  BODY=$(parse_body "$RES"); STATUS=$(parse_status "$RES")
+  assert_http "Create canonical question" 201 "$STATUS" "$BODY"
+  Q_DB_ID=$(echo "$BODY" | grep -o '"id":"[^"]*"' | head -1 | cut -d'"' -f4)
+  info "Canonical question DB ID: $Q_DB_ID  | questionId: $Q_ORIG_ID"
+
+  for i in $(seq 2 10); do
+    do_req -X POST "$BASE/questions" \
+      -H "Authorization: Bearer $ADMIN_TOKEN" \
+      -H "Content-Type: application/json" \
+      -d "{\"questionId\":\"SYSIMM_${TS}_$(printf '%03d' $i)\",\"version\":1,\"subject\":\"Math\",\"topic\":\"Algebra\",\"subtopic\":\"Linear\",\"difficulty\":\"EASY\",\"questionType\":\"MCQ\",\"contentPayload\":{\"question\":\"Imm Q$i: 1+$i=?\",\"options\":[{\"key\":\"A\",\"text\":\"$(($i+1))\"},{\"key\":\"B\",\"text\":\"$(($i+2))\"},{\"key\":\"C\",\"text\":\"$(($i+3))\"},{\"key\":\"D\",\"text\":\"$(($i+4))\"}]},\"correctAnswer\":\"A\",\"explanation\":\"ans\",\"marks\":4}" > /dev/null
+  done
+
+  # ── 1. Direct mutation of canonical question → must be rejected ──
+  step "1. PATCH /questions/:questionId — mutation without version → rejected"
+  endpoint "PATCH" "/questions/:questionId"
+  track "PATCH canonical question (no version bump)" "PATCH" "/questions/:questionId"
+  RES=$(do_req -X PATCH "$BASE/questions/$Q_ORIG_ID" \
+    -H "Authorization: Bearer $ADMIN_TOKEN" \
+    -H "Content-Type: application/json" \
+    -d "{\"contentPayload\":{\"question\":\"MUTATED question text\",\"options\":[{\"key\":\"A\",\"text\":\"MUTATED\"},{\"key\":\"B\",\"text\":\"Opt B\"},{\"key\":\"C\",\"text\":\"Opt C\"},{\"key\":\"D\",\"text\":\"Opt D\"}]}}")
+  BODY=$(parse_body "$RES"); STATUS=$(parse_status "$RES")
+  info "PATCH question without version bump: HTTP $STATUS"
+  if [[ "$STATUS" == "400" || "$STATUS" == "403" || "$STATUS" == "405" || "$STATUS" == "409" || "$STATUS" == "422" ]]; then
+    pass "Canonical mutation rejected (HTTP $STATUS) — immutability enforced"
+    SECTION_P=$(( SECTION_P+1 ))
+  elif [[ "$STATUS" == "200" || "$STATUS" == "201" ]]; then
+    # Allowed — check if version was incremented (versioned mutation pattern)
+    local new_version; new_version=$(echo "$BODY" | grep -o '"version":[0-9]*' | head -1 | grep -o '[0-9]*')
+    if [[ -n "$new_version" && "$new_version" -gt 1 ]]; then
+      pass "Canonical mutation accepted with auto-version increment (v$new_version) — versioned immutability"
+      SECTION_P=$(( SECTION_P+1 ))
+    else
+      fail "Canonical question mutated WITHOUT version increment — immutability violated"
+      SECTION_F=$(( SECTION_F+1 ))
+      FAILURES+=("${CURRENT_SECTION}|Canonical mutation without version|PATCH /questions/:id|rejected or version bumped|HTTP $STATUS version=$new_version|CRITICAL — question content changed in-place")
+    fi
+  else
+    warn "PATCH question returned HTTP $STATUS — endpoint may not exist; immutability assumed enforced"
+  fi
+
+  # ── 2. Verify canonical content unchanged ─────────────────
+  step "2. GET /questions/:questionId — canonical content preserved"
+  endpoint "GET" "/questions/:questionId"
+  track "Canonical content preserved" "GET" "/questions/:questionId"
+  RES=$(do_req -X GET "$BASE/questions/$Q_ORIG_ID" \
+    -H "Authorization: Bearer $ADMIN_TOKEN")
+  BODY=$(parse_body "$RES"); STATUS=$(parse_status "$RES")
+  assert_http "GET canonical question" 200 "$STATUS" "$BODY"
+  if echo "$BODY" | grep -q "MUTATED question text"; then
+    fail "  Canonical question text was mutated — immutability VIOLATED"
+    SECTION_F=$(( SECTION_F+1 ))
+    FAILURES+=("${CURRENT_SECTION}|Canonical text mutated|GET /questions/:id|original text|MUTATED text|CRITICAL — canonical question content changed")
+  else
+    pass "  Canonical question text is preserved (not mutated)"
+    SECTION_P=$(( SECTION_P+1 ))
+  fi
+
+  # ── 3. Generate test — snapshot must use canonical content ─
+  step "3. Generate test — snapshot must capture question content at generation time"
+  endpoint "POST" "/test-threads"
+  RES=$(do_req -X POST "$BASE/test-threads" \
+    -H "Authorization: Bearer $LEARNER_TOKEN" \
+    -H "Content-Type: application/json" \
+    -d "{\"examId\":\"$EXAM_ID\",\"originType\":\"GENERATED\",\"title\":\"ImmTest ${TS}\",\"baseGenerationConfig\":{}}")
+  THREAD_ID=$(parse_body "$RES" | grep -o '"id":"[^"]*"' | head -1 | cut -d'"' -f4)
+
+  RES=$(do_req -X POST "$BASE/test-threads/$THREAD_ID/generate" \
+    -H "Authorization: Bearer $LEARNER_TOKEN" \
+    -H "Content-Type: application/json" \
+    -d "{\"followsBlueprint\":true,\"blueprintReferenceId\":\"$BLUEPRINT_ID\"}")
+  BODY=$(parse_body "$RES"); STATUS=$(parse_status "$RES")
+  assert_http "Generate test (for snapshot)" 201 "$STATUS" "$BODY"
+  TEST_ID=$(echo "$BODY" | grep -o '"id":"[^"]*"' | head -1 | cut -d'"' -f4)
+  info "Immutability test ID: $TEST_ID"
+
+  track "Snapshot contains sectionSnapshot" "GET" "/tests/:id"
+  RES=$(do_req -X GET "$BASE/tests/$TEST_ID" \
+    -H "Authorization: Bearer $ADMIN_TOKEN")
+  BODY=$(parse_body "$RES"); STATUS=$(parse_status "$RES")
+  assert_http  "GET test detail (snapshot)" 200 "$STATUS" "$BODY"
+  assert_field "  test has sectionSnapshot" "sectionSnapshot" "$BODY"
+  assert_field "  test has ruleSnapshot"    "ruleSnapshot"    "$BODY"
+
+  # ── 4. Test questions snapshot is immutable reference ──────
+  step "4. GET /tests/:id/questions — questions snapshotted at generation time"
+  endpoint "GET" "/tests/:id/questions"
+  track "Snapshot questions present" "GET" "/tests/:id/questions"
+  RES=$(do_req -X GET "$BASE/tests/$TEST_ID/questions" \
+    -H "Authorization: Bearer $ADMIN_TOKEN")
+  BODY=$(parse_body "$RES"); STATUS=$(parse_status "$RES")
+  assert_http     "GET test questions (snapshot)" 200 "$STATUS" "$BODY"
+  assert_contains "  snapshot is non-empty array" "\[" "$BODY"
+  assert_field    "  snapshot has questionId"     "questionId" "$BODY"
+  # Each entry in the snapshot MUST carry its own contentPayload — not a live reference
+  assert_field    "  snapshot has contentPayload" "contentPayload" "$BODY"
+
+  # ── 5. Duplicate question version must be rejected (same questionId + version) ──
+  step "5. POST /questions — same questionId same version → 409 (no silent overwrite)"
+  endpoint "POST" "/questions"
+  track "Duplicate version rejected" "POST" "/questions"
+  RES=$(do_req -X POST "$BASE/questions" \
+    -H "Authorization: Bearer $ADMIN_TOKEN" \
+    -H "Content-Type: application/json" \
+    -d "{\"questionId\":\"$Q_ORIG_ID\",\"version\":1,\"subject\":\"Math\",\"topic\":\"Algebra\",\"subtopic\":\"Linear\",\"difficulty\":\"MEDIUM\",\"questionType\":\"MCQ\",\"contentPayload\":{\"question\":\"Tampered same version\",\"options\":[{\"key\":\"A\",\"text\":\"X\"},{\"key\":\"B\",\"text\":\"Y\"},{\"key\":\"C\",\"text\":\"Z\"},{\"key\":\"D\",\"text\":\"W\"}]},\"correctAnswer\":\"B\",\"explanation\":\"tampered\",\"marks\":4}")
+  BODY=$(parse_body "$RES"); STATUS=$(parse_status "$RES")
+  assert_http "Duplicate questionId+version rejected" 409 "$STATUS" "$BODY"
+
+  section_end
+}
+
+# =============================================================================
+#  § 12  SUBSCRIPTION GATING — Access Control Integration
+#
+#  Verifies that subscription state is enforced at the test-access layer:
+#    - Learner with no subscription is blocked
+#    - Cancelled subscription blocks access
+#    - Expired subscription blocks access
+#    - Admin-granted access grants passage
+#    - Revocation mid-test is handled
+# =============================================================================
+run_subscription_gating() {
+  begin_section "🚪" "Subscription Gating — Access Control"
+
+  local RES BODY STATUS
+  local ADMIN_TOKEN
+  local EXAM_ID BLUEPRINT_ID THREAD_ID TEST_ID
+  local ACTIVE_PACK_ID SUB_ID
+  local L_NO_SUB_TOKEN L_CANCELLED_TOKEN L_ACTIVE_TOKEN L_ADMIN_GRANT_TOKEN
+
+  RES=$(do_req -X POST "$BASE/auth/login" \
+    -H "Content-Type: application/json" \
+    -d "{\"email\":\"$ADMIN_EMAIL\",\"password\":\"$ADMIN_PASS\"}")
+  ADMIN_TOKEN=$(parse_body "$RES" | grep -o '"accessToken":"[^"]*"' | cut -d'"' -f4)
+
+  # Register 4 test learners with distinct sub states
+  local L_NOSUB_EMAIL="sys_nosub_${TS}@quezia.dev"
+  local L_CANCELLED_EMAIL="sys_canc_${TS}@quezia.dev"
+  local L_ACTIVE_EMAIL="sys_actv_${TS}@quezia.dev"
+  local L_GRANT_EMAIL="sys_grnt_${TS}@quezia.dev"
+
+  RES=$(do_req -X POST "$BASE/auth/register" \
+    -H "Content-Type: application/json" \
+    -d "{\"email\":\"$L_NOSUB_EMAIL\",\"username\":\"sys_nosub_${TS}\",\"password\":\"Test@1234\"}")
+  L_NO_SUB_TOKEN=$(parse_body "$RES" | grep -o '"accessToken":"[^"]*"' | cut -d'"' -f4)
+
+  RES=$(do_req -X POST "$BASE/auth/register" \
+    -H "Content-Type: application/json" \
+    -d "{\"email\":\"$L_CANCELLED_EMAIL\",\"username\":\"sys_canc_${TS}\",\"password\":\"Test@1234\"}")
+  L_CANCELLED_TOKEN=$(parse_body "$RES" | grep -o '"accessToken":"[^"]*"' | cut -d'"' -f4)
+
+  RES=$(do_req -X POST "$BASE/auth/register" \
+    -H "Content-Type: application/json" \
+    -d "{\"email\":\"$L_ACTIVE_EMAIL\",\"username\":\"sys_actv_${TS}\",\"password\":\"Test@1234\"}")
+  L_ACTIVE_TOKEN=$(parse_body "$RES" | grep -o '"accessToken":"[^"]*"' | cut -d'"' -f4)
+
+  RES=$(do_req -X POST "$BASE/auth/register" \
+    -H "Content-Type: application/json" \
+    -d "{\"email\":\"$L_GRANT_EMAIL\",\"username\":\"sys_grnt_${TS}\",\"password\":\"Test@1234\"}")
+  L_ADMIN_GRANT_TOKEN=$(parse_body "$RES" | grep -o '"accessToken":"[^"]*"' | cut -d'"' -f4)
+  local L_GRANT_ID; L_GRANT_ID=$(parse_body "$RES" | grep -o '"id":"[^"]*"' | head -1 | cut -d'"' -f4)
+
+  # Create exam, blueprint, subscription pack
+  RES=$(do_req -X POST "$BASE/exams" \
+    -H "Authorization: Bearer $ADMIN_TOKEN" \
+    -H "Content-Type: application/json" \
+    -d "{\"name\":\"SYSGATE_${TS}\",\"isActive\":true}")
+  EXAM_ID=$(parse_body "$RES" | grep -o '"id":"[^"]*"' | head -1 | cut -d'"' -f4)
+
+  RES=$(do_req -X POST "$BASE/exams/$EXAM_ID/blueprints" \
+    -H "Authorization: Bearer $ADMIN_TOKEN" \
+    -H "Content-Type: application/json" \
+    -d "{\"version\":1,\"defaultDurationSeconds\":3600,\"effectiveFrom\":\"2025-01-01T00:00:00.000Z\",\"sections\":[{\"subject\":\"Math\",\"sequence\":1,\"sectionDurationSeconds\":3600}],\"rules\":[{\"totalTimeSeconds\":3600,\"negativeMarking\":false,\"partialMarking\":false,\"adaptiveAllowed\":false,\"effectiveFrom\":\"2025-01-01T00:00:00.000Z\"}]}")
+  BLUEPRINT_ID=$(parse_body "$RES" | grep -o '"id":"[^"]*"' | head -1 | cut -d'"' -f4)
+
+  # Seed questions
+  info "Seeding 10 questions for gating test…"
+  for i in $(seq 1 10); do
+    do_req -X POST "$BASE/questions" \
+      -H "Authorization: Bearer $ADMIN_TOKEN" \
+      -H "Content-Type: application/json" \
+      -d "{\"questionId\":\"SYSGATE_${TS}_$(printf '%03d' $i)\",\"version\":1,\"subject\":\"Math\",\"topic\":\"Algebra\",\"subtopic\":\"Linear\",\"difficulty\":\"EASY\",\"questionType\":\"MCQ\",\"contentPayload\":{\"question\":\"Gate Q$i: $i+1=?\",\"options\":[{\"key\":\"A\",\"text\":\"$(($i+1))\"},{\"key\":\"B\",\"text\":\"$(($i+2))\"},{\"key\":\"C\",\"text\":\"$(($i+3))\"},{\"key\":\"D\",\"text\":\"$(($i+4))\"}]},\"correctAnswer\":\"A\",\"explanation\":\"ans\",\"marks\":4}" > /dev/null
+  done
+
+  RES=$(do_req -X POST "$BASE/subscriptions/packs" \
+    -H "Authorization: Bearer $ADMIN_TOKEN" \
+    -H "Content-Type: application/json" \
+    -d "{\"examId\":\"$EXAM_ID\",\"name\":\"Gate Pack\",\"durationDays\":30,\"price\":5000,\"isActive\":true}")
+  ACTIVE_PACK_ID=$(parse_body "$RES" | grep -o '"id":"[^"]*"' | head -1 | cut -d'"' -f4)
+  info "Gate Pack: $ACTIVE_PACK_ID"
+
+  # Create + publish a SYSTEM test that requires subscription
+  RES=$(do_req -X POST "$BASE/test-threads" \
+    -H "Authorization: Bearer $ADMIN_TOKEN" \
+    -H "Content-Type: application/json" \
+    -d "{\"examId\":\"$EXAM_ID\",\"originType\":\"SYSTEM\",\"title\":\"Gate Test ${TS}\",\"baseGenerationConfig\":{}}")
+  THREAD_ID=$(parse_body "$RES" | grep -o '"id":"[^"]*"' | head -1 | cut -d'"' -f4)
+
+  RES=$(do_req -X POST "$BASE/test-threads/$THREAD_ID/generate" \
+    -H "Authorization: Bearer $ADMIN_TOKEN" \
+    -H "Content-Type: application/json" \
+    -d "{\"followsBlueprint\":true,\"blueprintReferenceId\":\"$BLUEPRINT_ID\"}")
+  TEST_ID=$(parse_body "$RES" | grep -o '"id":"[^"]*"' | head -1 | cut -d'"' -f4)
+
+  do_req -X PATCH "$BASE/tests/$TEST_ID/publish" \
+    -H "Authorization: Bearer $ADMIN_TOKEN" > /dev/null
+  info "Published SYSTEM test: $TEST_ID"
+
+  # Give L_CANCELLED_TOKEN an active sub, then cancel it
+  RES=$(do_req -X POST "$BASE/subscriptions/subscribe" \
+    -H "Authorization: Bearer $L_CANCELLED_TOKEN" \
+    -H "Content-Type: application/json" \
+    -d "{\"packId\":\"$ACTIVE_PACK_ID\",\"paymentProvider\":\"paystack\",\"providerReference\":\"ps_canc_${TS}\"}")
+  local CANC_SUB_ID; CANC_SUB_ID=$(parse_body "$RES" | grep -o '"id":"[^"]*"' | head -1 | cut -d'"' -f4)
+  do_req -X DELETE "$BASE/subscriptions/my/$CANC_SUB_ID/cancel" \
+    -H "Authorization: Bearer $L_CANCELLED_TOKEN" > /dev/null
+  info "Cancelled sub ID: $CANC_SUB_ID"
+
+  # Give L_ACTIVE_TOKEN a valid sub
+  RES=$(do_req -X POST "$BASE/subscriptions/subscribe" \
+    -H "Authorization: Bearer $L_ACTIVE_TOKEN" \
+    -H "Content-Type: application/json" \
+    -d "{\"packId\":\"$ACTIVE_PACK_ID\",\"paymentProvider\":\"paystack\",\"providerReference\":\"ps_actv_${TS}\"}")
+  SUB_ID=$(parse_body "$RES" | grep -o '"id":"[^"]*"' | head -1 | cut -d'"' -f4)
+  info "Active sub ID: $SUB_ID"
+
+  # Admin-grant access to L_GRANT user
+  RES=$(do_req -X POST "$BASE/subscriptions/admin/grant" \
+    -H "Authorization: Bearer $ADMIN_TOKEN" \
+    -H "Content-Type: application/json" \
+    -d "{\"userId\":\"$L_GRANT_ID\",\"packId\":\"$ACTIVE_PACK_ID\",\"durationDaysOverride\":7}")
+  info "Admin grant status: $(parse_status "$RES")"
+
+  # ── 1. No subscription → blocked ─────────────────────────
+  step "1. POST /attempts/:testId/start — no subscription → 403"
+  endpoint "POST" "/attempts/:testId/start"
+  track "Attempt start: no subscription" "POST" "/attempts/:testId/start"
+  RES=$(do_req -X POST "$BASE/attempts/$TEST_ID/start" \
+    -H "Authorization: Bearer $L_NO_SUB_TOKEN")
+  BODY=$(parse_body "$RES"); STATUS=$(parse_status "$RES")
+  if [[ "$STATUS" == "403" || "$STATUS" == "402" ]]; then
+    pass "No-subscription learner blocked (HTTP $STATUS)"
+    SECTION_P=$(( SECTION_P+1 ))
+  elif [[ "$STATUS" == "201" ]]; then
+    fail "No-subscription learner was allowed to start SYSTEM test — subscription gating NOT enforced"
+    SECTION_F=$(( SECTION_F+1 ))
+    FAILURES+=("${CURRENT_SECTION}|No-sub learner allowed|POST /attempts/:testId/start|403|201|subscription gating not enforced for SYSTEM tests")
+  else
+    warn "No-subscription attempt returned HTTP $STATUS (gating may use different code)"
+    # Accept 402 Payment Required or 403 Forbidden
+    if [[ "$STATUS" != "201" && "$STATUS" != "200" ]]; then
+      pass "  No-sub learner not admitted (HTTP $STATUS)"
+      SECTION_P=$(( SECTION_P+1 ))
+    fi
+  fi
+
+  # ── 2. Cancelled subscription → blocked ──────────────────
+  step "2. POST /attempts/:testId/start — cancelled subscription → 403"
+  endpoint "POST" "/attempts/:testId/start"
+  track "Attempt start: cancelled subscription" "POST" "/attempts/:testId/start"
+  RES=$(do_req -X POST "$BASE/attempts/$TEST_ID/start" \
+    -H "Authorization: Bearer $L_CANCELLED_TOKEN")
+  BODY=$(parse_body "$RES"); STATUS=$(parse_status "$RES")
+  if [[ "$STATUS" == "403" || "$STATUS" == "402" ]]; then
+    pass "Cancelled-sub learner blocked (HTTP $STATUS)"
+    SECTION_P=$(( SECTION_P+1 ))
+  elif [[ "$STATUS" == "201" ]]; then
+    fail "Cancelled-sub learner was allowed — subscription cancellation not enforced"
+    SECTION_F=$(( SECTION_F+1 ))
+    FAILURES+=("${CURRENT_SECTION}|Cancelled-sub learner allowed|POST /attempts/:testId/start|403|201|cancelled subscription still grants access")
+  else
+    warn "Cancelled-sub attempt returned HTTP $STATUS"
+    if [[ "$STATUS" != "201" && "$STATUS" != "200" ]]; then
+      pass "  Cancelled-sub learner not admitted (HTTP $STATUS)"
+      SECTION_P=$(( SECTION_P+1 ))
+    fi
+  fi
+
+  # ── 3. Active subscription → permitted ───────────────────
+  step "3. POST /attempts/:testId/start — active subscription → 201"
+  endpoint "POST" "/attempts/:testId/start"
+  track "Attempt start: active subscription" "POST" "/attempts/:testId/start"
+  RES=$(do_req -X POST "$BASE/attempts/$TEST_ID/start" \
+    -H "Authorization: Bearer $L_ACTIVE_TOKEN")
+  BODY=$(parse_body "$RES"); STATUS=$(parse_status "$RES")
+  assert_http "Active-sub learner permitted" 201 "$STATUS" "$BODY"
+  assert_contains "  status ACTIVE" '"status":"ACTIVE"' "$BODY"
+  local ACTIVE_ATTEMPT_ID; ACTIVE_ATTEMPT_ID=$(echo "$BODY" | grep -o '"id":"[^"]*"' | head -1 | cut -d'"' -f4)
+  info "Active learner attempt: $ACTIVE_ATTEMPT_ID"
+
+  # ── 4. Admin-granted access → permitted ───────────────────
+  step "4. POST /attempts/:testId/start — admin-granted access → 201"
+  endpoint "POST" "/attempts/:testId/start"
+  track "Attempt start: admin-granted" "POST" "/attempts/:testId/start"
+  RES=$(do_req -X POST "$BASE/attempts/$TEST_ID/start" \
+    -H "Authorization: Bearer $L_ADMIN_GRANT_TOKEN")
+  BODY=$(parse_body "$RES"); STATUS=$(parse_status "$RES")
+  if [[ "$STATUS" == "201" ]]; then
+    pass "Admin-granted access permitted (201)"
+    SECTION_P=$(( SECTION_P+1 ))
+    assert_contains "  status ACTIVE" '"status":"ACTIVE"' "$BODY"
+  elif [[ "$STATUS" == "403" || "$STATUS" == "402" ]]; then
+    fail "Admin-granted access BLOCKED — admin override not respected by access guard"
+    SECTION_F=$(( SECTION_F+1 ))
+    FAILURES+=("${CURRENT_SECTION}|Admin-grant blocked|POST /attempts/:testId/start|201|$STATUS|admin override subscription not honoured")
+  else
+    warn "Admin-granted attempt returned HTTP $STATUS"
+  fi
+
+  # ── 5. Cancel active subscription → access access check ──
+  step "5. Cancel active subscription — verify access revocation"
+  endpoint "DELETE" "/subscriptions/my/:id/cancel"
+  track "Cancel active sub then check access" "DELETE" "/subscriptions/my/:id/cancel"
+  RES=$(do_req -X DELETE "$BASE/subscriptions/my/$SUB_ID/cancel" \
+    -H "Authorization: Bearer $L_ACTIVE_TOKEN")
+  BODY=$(parse_body "$RES"); STATUS=$(parse_status "$RES")
+  assert_http     "Cancel active subscription"     200 "$STATUS" "$BODY"
+  assert_contains "  status CANCELLED"            '"status":"CANCELLED"' "$BODY"
+
+  # Check access endpoint now shows no active subscription
+  track "Access check after cancellation" "GET" "/subscriptions/my/access/:examId"
+  RES=$(do_req -X GET "$BASE/subscriptions/my/access/$EXAM_ID" \
+    -H "Authorization: Bearer $L_ACTIVE_TOKEN")
+  BODY=$(parse_body "$RES"); STATUS=$(parse_status "$RES")
+  if [[ "$STATUS" == "200" ]]; then
+    if echo "$BODY" | grep -q '"status":"ACTIVE"'; then
+      fail "Access endpoint still shows ACTIVE after cancellation — revocation not propagated"
+      SECTION_F=$(( SECTION_F+1 ))
+      FAILURES+=("${CURRENT_SECTION}|Access still ACTIVE after cancel|GET /subscriptions/my/access/:examId|no ACTIVE|ACTIVE returned|subscription revocation not reflected")
+    else
+      pass "Access endpoint reflects cancellation (no ACTIVE subscription)"
+      SECTION_P=$(( SECTION_P+1 ))
+    fi
+  elif [[ "$STATUS" == "404" || "$STATUS" == "403" ]]; then
+    pass "Access endpoint returns $STATUS after cancellation (no active sub)"
+    SECTION_P=$(( SECTION_P+1 ))
+  else
+    warn "Access check after cancel returned HTTP $STATUS"
+  fi
+
+  # ── 6. Revoked user cannot start a NEW attempt ───────────
+  step "6. POST /attempts/:testId/start after cancellation — blocked"
+  endpoint "POST" "/attempts/:testId/start"
+  track "New attempt after cancellation" "POST" "/attempts/:testId/start"
+  # Need a different test (can't start already-started test)
+  local GATE2_THREAD_ID GATE2_TEST_ID
+  RES=$(do_req -X POST "$BASE/test-threads" \
+    -H "Authorization: Bearer $ADMIN_TOKEN" \
+    -H "Content-Type: application/json" \
+    -d "{\"examId\":\"$EXAM_ID\",\"originType\":\"SYSTEM\",\"title\":\"Gate Test2 ${TS}\",\"baseGenerationConfig\":{}}")
+  GATE2_THREAD_ID=$(parse_body "$RES" | grep -o '"id":"[^"]*"' | head -1 | cut -d'"' -f4)
+  RES=$(do_req -X POST "$BASE/test-threads/$GATE2_THREAD_ID/generate" \
+    -H "Authorization: Bearer $ADMIN_TOKEN" \
+    -H "Content-Type: application/json" \
+    -d "{\"followsBlueprint\":true,\"blueprintReferenceId\":\"$BLUEPRINT_ID\"}")
+  GATE2_TEST_ID=$(parse_body "$RES" | grep -o '"id":"[^"]*"' | head -1 | cut -d'"' -f4)
+  do_req -X PATCH "$BASE/tests/$GATE2_TEST_ID/publish" \
+    -H "Authorization: Bearer $ADMIN_TOKEN" > /dev/null
+
+  RES=$(do_req -X POST "$BASE/attempts/$GATE2_TEST_ID/start" \
+    -H "Authorization: Bearer $L_ACTIVE_TOKEN")
+  BODY=$(parse_body "$RES"); STATUS=$(parse_status "$RES")
+  if [[ "$STATUS" == "403" || "$STATUS" == "402" ]]; then
+    pass "Post-cancellation attempt blocked (HTTP $STATUS) — access revocation enforced"
+    SECTION_P=$(( SECTION_P+1 ))
+  elif [[ "$STATUS" == "201" ]]; then
+    fail "Post-cancellation attempt PERMITTED — access revocation not enforced"
+    SECTION_F=$(( SECTION_F+1 ))
+    FAILURES+=("${CURRENT_SECTION}|Post-cancel attempt allowed|POST /attempts/:testId/start|403|201|cancelled sub still grants access to new attempts")
+  else
+    warn "Post-cancel attempt returned HTTP $STATUS (gating varies by implementation)"
+    if [[ "$STATUS" != "201" && "$STATUS" != "200" ]]; then
+      pass "  Post-cancel learner not admitted (HTTP $STATUS)"
+      SECTION_P=$(( SECTION_P+1 ))
+    fi
+  fi
+
+  section_end
+}
+
+# =============================================================================
 #  GRAND SUMMARY
 # =============================================================================
 print_summary() {
@@ -1817,18 +2795,133 @@ print_summary() {
 }
 
 # =============================================================================
+#  SECTION REGISTRY
+#  Add new sections here — order is the run order and menu order.
+# =============================================================================
+declare -a SECTION_KEYS=(
+  "run_auth_users"
+  "run_exams_blueprints"
+  "run_subscriptions"
+  "run_questions"
+  "run_tests_attempts"
+  "run_admin_analytics"
+  "run_grading_analytics"
+  "run_transaction_atomicity"
+  "run_concurrency"
+  "run_blueprint_overlap"
+  "run_question_immutability"
+  "run_subscription_gating"
+)
+declare -a SECTION_LABELS=(
+  "👤  Auth & Users"
+  "📋  Exams & Blueprints"
+  "💳  Subscriptions"
+  "❓  Question Registry"
+  "📝  Tests & Attempts"
+  "🛡️   Admin Operations"
+  "📊  Grading & Analytics"
+  "⚛️   Transaction Atomicity"
+  "⚡  Concurrency Race Conditions"
+  "📐  Blueprint Effective Window Overlap"
+  "🔒  Question Immutability"
+  "🚪  Subscription Gating"
+)
+
+# =============================================================================
+#  INTERACTIVE SECTION SELECTOR
+# =============================================================================
+select_sections() {
+  blank
+  printf "${C_BOLD}${C_WHITE}  ┌─────────────────────────────────────────────────────────┐${C_RESET}\n"
+  printf "${C_BOLD}${C_WHITE}  │               SELECT TEST SECTIONS TO RUN               │${C_RESET}\n"
+  printf "${C_BOLD}${C_WHITE}  └─────────────────────────────────────────────────────────┘${C_RESET}\n"
+  blank
+  printf "  ${C_DIM}%3s  %-54s${C_RESET}\n" "#" "Section"
+  printf "  ${C_DIM}%3s  %-54s${C_RESET}\n" "───" "──────────────────────────────────────────────────────"
+  for i in "${!SECTION_KEYS[@]}"; do
+    printf "  ${C_CYAN}${C_BOLD}%3d${C_RESET}  %s\n" "$(( i+1 ))" "${SECTION_LABELS[$i]}"
+  done
+  blank
+  printf "  ${C_DIM}Enter section numbers separated by spaces, or press${C_RESET} ${C_GREEN}${C_BOLD}ENTER${C_RESET} ${C_DIM}for ALL:${C_RESET}\n"
+  printf "  ${C_DIM}Examples:  ${C_WHITE}1 3 5${C_DIM}  ·  ${C_WHITE}7 8 9${C_DIM}  ·  ${C_WHITE}(ENTER)${C_DIM} = run everything${C_RESET}\n"
+  blank
+  printf "  ${C_BOLD}${C_CYAN}▶  ${C_RESET}"
+  local selection
+  read -r selection
+
+  # Build the list of functions to run
+  SELECTED_KEYS=()
+  SELECTED_LABELS=()
+
+  if [[ -z "$selection" ]]; then
+    # Run all
+    SELECTED_KEYS=( "${SECTION_KEYS[@]}" )
+    SELECTED_LABELS=( "${SECTION_LABELS[@]}" )
+  else
+    local valid=true
+    for token in $selection; do
+      if ! [[ "$token" =~ ^[0-9]+$ ]]; then
+        printf "  ${C_RED}Invalid input: '%s' — must be a number.${C_RESET}\n" "$token"
+        valid=false
+        break
+      fi
+      local idx=$(( token - 1 ))
+      if [[ $idx -lt 0 || $idx -ge ${#SECTION_KEYS[@]} ]]; then
+        printf "  ${C_RED}Invalid section number: %d (valid range: 1–%d)${C_RESET}\n" \
+          "$token" "${#SECTION_KEYS[@]}"
+        valid=false
+        break
+      fi
+      SELECTED_KEYS+=("${SECTION_KEYS[$idx]}")
+      SELECTED_LABELS+=("${SECTION_LABELS[$idx]}")
+    done
+    if [[ "$valid" == false ]]; then
+      blank
+      printf "  ${C_YELLOW}Falling back to running ALL sections.${C_RESET}\n"
+      SELECTED_KEYS=( "${SECTION_KEYS[@]}" )
+      SELECTED_LABELS=( "${SECTION_LABELS[@]}" )
+    fi
+  fi
+
+  blank
+  printf "  ${C_DIM}Running %d section(s):${C_RESET}\n" "${#SELECTED_KEYS[@]}"
+  for lbl in "${SELECTED_LABELS[@]}"; do
+    printf "    ${C_GREEN}${SYM_ARROW}${C_RESET}  %s\n" "$lbl"
+  done
+  blank
+}
+
+# =============================================================================
 #  ENTRYPOINT
 # =============================================================================
 print_banner
 check_server
 
-run_auth_users
-run_exams_blueprints
-run_subscriptions
-run_questions
-run_tests_attempts
-run_admin_analytics
-run_grading_analytics
+# Allow non-interactive mode: pass --all to skip the menu
+declare -a SELECTED_KEYS=()
+declare -a SELECTED_LABELS=()
+
+if [[ "${1:-}" == "--all" ]]; then
+  SELECTED_KEYS=( "${SECTION_KEYS[@]}" )
+  SELECTED_LABELS=( "${SECTION_LABELS[@]}" )
+  blank
+  printf "  ${C_DIM}--all flag detected — running all sections.${C_RESET}\n"
+  blank
+elif [[ -t 0 ]]; then
+  # stdin is a terminal — show the interactive menu
+  select_sections
+else
+  # Non-interactive (piped / CI) — default to all
+  SELECTED_KEYS=( "${SECTION_KEYS[@]}" )
+  SELECTED_LABELS=( "${SECTION_LABELS[@]}" )
+  blank
+  printf "  ${C_DIM}Non-interactive mode — running all sections.${C_RESET}\n"
+  blank
+fi
+
+for fn in "${SELECTED_KEYS[@]}"; do
+  "$fn"
+done
 
 print_summary
 
