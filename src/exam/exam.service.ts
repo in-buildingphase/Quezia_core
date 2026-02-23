@@ -1,6 +1,7 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { CreateExamDto } from './dto/create-exam.dto';
+import { UpdateExamDto } from './dto/update-exam.dto';
 import { CreateBlueprintDto } from './dto/create-blueprint.dto';
 import { ActivateBlueprintDto } from './dto/activate-blueprint.dto';
 
@@ -14,6 +15,18 @@ export class ExamService {
                 name: dto.name,
                 description: dto.description,
                 isActive: dto.isActive ?? true,
+            },
+        });
+    }
+
+    async updateExam(id: string, dto: UpdateExamDto) {
+        await this.getExamById(id);
+        return this.prisma.exam.update({
+            where: { id },
+            data: {
+                ...(dto.name !== undefined && { name: dto.name }),
+                ...(dto.description !== undefined && { description: dto.description }),
+                ...(dto.isActive !== undefined && { isActive: dto.isActive }),
             },
         });
     }
@@ -108,6 +121,22 @@ export class ExamService {
             data: {
                 effectiveFrom: new Date(dto.effectiveFrom),
                 effectiveTo: dto.effectiveTo ? new Date(dto.effectiveTo) : null,
+            },
+        });
+    }
+
+    /**
+     * Archives a blueprint by setting its effectiveTo to the current
+     * timestamp, making it no longer active for any future date query.
+     */
+    async archiveBlueprint(id: string) {
+        await this.getBlueprintById(id);
+        return this.prisma.examBlueprint.update({
+            where: { id },
+            data: { effectiveTo: new Date() },
+            include: {
+                sections: { orderBy: { sequence: 'asc' } },
+                rules: true,
             },
         });
     }

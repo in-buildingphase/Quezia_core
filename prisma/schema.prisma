@@ -19,6 +19,23 @@ enum UserRole {
   ADMIN
 }
 
+enum AuthEventType {
+  REGISTER
+  LOGIN
+  LOGOUT
+  PASSWORD_RESET_REQUEST
+  PASSWORD_RESET_SUCCESS
+  EMAIL_VERIFICATION_REQUEST
+  EMAIL_VERIFICATION_SUCCESS
+  ACCOUNT_SUSPENDED
+  ACCOUNT_ACTIVATED
+}
+
+enum AuthEventStatus {
+  SUCCESS
+  FAILURE
+}
+
 enum SubscriptionStatus {
   ACTIVE
   EXPIRED
@@ -71,6 +88,10 @@ enum TopicHealthStatus {
 // IDENTITY LAYER
 // ======================================================
 
+// ======================================================
+// IDENTITY LAYER
+// ======================================================
+
 model User {
   id           String    @id @default(cuid())
   email        String    @unique
@@ -81,7 +102,14 @@ model User {
   createdAt    DateTime  @default(now())
   lastLogin    DateTime?
 
+  isEmailVerified        Boolean   @default(false)
+  emailVerificationToken String?   @unique
+  resetPasswordToken     String?   @unique
+  resetPasswordExpires   DateTime?
+
   profile           UserProfile?
+  sessions          Session[]
+  authLogs          AuthAuditLog[]
   subscriptions     UserSubscription[]
   threads           TestThread[]
   attempts          TestAttempt[]
@@ -90,6 +118,36 @@ model User {
 
   @@index([role])
   @@index([isActive])
+}
+
+model Session {
+  id               String   @id @default(cuid())
+  userId           String
+  user             User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  refreshTokenHash String // Hashed for security
+  deviceInfo       String? // e.g., "Chrome on macOS"
+  ipAddress        String?
+  expiresAt        DateTime
+  createdAt        DateTime @default(now())
+
+  @@index([userId])
+  @@index([expiresAt])
+}
+
+model AuthAuditLog {
+  id         String          @id @default(cuid())
+  userId     String?
+  user       User?           @relation(fields: [userId], references: [id], onDelete: SetNull)
+  event      AuthEventType
+  status     AuthEventStatus
+  ipAddress  String?
+  deviceInfo String?
+  metadata   Json? // Additional details (e.g., failure reason)
+  createdAt  DateTime        @default(now())
+
+  @@index([userId])
+  @@index([event])
+  @@index([createdAt])
 }
 
 // ======================================================
@@ -297,7 +355,7 @@ model Test {
 
 model Question {
   id                 String       @id @default(cuid())
-  questionId         String       // Logical identifier (immutable across versions)
+  questionId         String // Logical identifier (immutable across versions)
   version            Int
   subject            String
   topic              String
@@ -330,17 +388,19 @@ model TestQuestion {
   test   Test   @relation(fields: [testId], references: [id], onDelete: Cascade)
 
   questionId   String
+  sectionId    String? // snapshot of which section this question belongs to
   subject      String
   topic        String
   subtopic     String
   difficulty   Difficulty
   questionType QuestionType
 
-  contentSnapshot Json
-  correctAnswer   String
-  explanation     String?
-  marks           Decimal
-  tolerance       Decimal?
+  contentSnapshot  Json
+  correctAnswer    String
+  explanation      String?
+  marks            Decimal
+  negativeMarkValue Decimal? // per-question negative marking override (nullable)
+  tolerance        Decimal?
 
   sequence Int
 
@@ -371,6 +431,7 @@ model TestAttempt {
   totalScore       Decimal?
   accuracy         Decimal?
   percentile       Decimal?
+  userRank         Int?
   timeSpentSeconds Int?
   riskRatio        Decimal?
 
@@ -418,8 +479,14 @@ model UserExamAnalytics {
   averageScore           Decimal
   bestRank               Int?
   currentStreak          Int
+  totalAttempts          Int       @default(0)
+  lastAttemptAt          DateTime?
   averageTimePerQuestion Decimal
   weakestSubject         String?
+
+  riskRatio          Decimal @default(0)
+  riskClassification String? // Aggressive, Balanced, Cautious
+  inefficiencyIndex  Decimal @default(0)
 
   updatedAt DateTime @updatedAt
 
@@ -471,6 +538,8 @@ model PerformanceTrend {
   userId String
   examId String
 
+  attemptId String? @unique
+
   testDate   DateTime
   score      Decimal
   accuracy   Decimal
@@ -487,9 +556,11 @@ model PeerBenchmark {
 
   percentileBands   Json
   subjectAverages   Json
-  scoreDistribution Json
+  scoreDistribution Json // Bucketed counters
+  totalParticipants Int  @default(0)
 
-  computedAt DateTime @default(now())
+  computedAt         DateTime  @default(now())
+  lastRecalculatedAt DateTime?
 
   @@index([examId])
 }

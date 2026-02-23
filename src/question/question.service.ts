@@ -1,9 +1,10 @@
-import { Injectable } from '@nestjs/common';
+import { ConflictException, Injectable } from '@nestjs/common';
 import { QuestionRepository } from './question.repository';
 import { QuestionValidatorService } from './question-validator.service';
 import { QuestionSelectionService } from './question-selection.service';
 import { QuestionSelectionRequest } from './dto/selection-request.dto';
 import { Question } from '@prisma/client';
+import { Prisma } from '@prisma/client';
 
 @Injectable()
 export class QuestionService {
@@ -22,8 +23,25 @@ export class QuestionService {
     }
 
     async createCanonicalQuestion(data: any): Promise<Question> {
-        this.validator.validateMetadata(data);
-        this.validator.validateStructure(data);
-        return this.repository.createQuestion(data);
+        // Full structural + content + metadata validation before persisting
+        this.validator.validateFull(data);
+        
+        // Set default for optional fields
+        const questionData = {
+            ...data,
+            defaultTimeSeconds: data.defaultTimeSeconds || 60, // Default 60 seconds
+        };
+        
+        try {
+            return await this.repository.createQuestion(questionData);
+        } catch (err) {
+            if (err instanceof Prisma.PrismaClientKnownRequestError && err.code === 'P2002') {
+                throw new ConflictException(
+                    `Question with questionId "${data.questionId}" and version ${data.version} already exists`,
+                );
+            }
+            throw err;
+        }
     }
 }
+

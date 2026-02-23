@@ -9,6 +9,7 @@ import {
 } from '@nestjs/common';
 import { ExamService } from './exam.service';
 import { CreateExamDto } from './dto/create-exam.dto';
+import { UpdateExamDto } from './dto/update-exam.dto';
 import { CreateBlueprintDto } from './dto/create-blueprint.dto';
 import { ActivateBlueprintDto } from './dto/activate-blueprint.dto';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
@@ -19,6 +20,10 @@ import { Roles } from '../common/decorators/roles.decorator';
 @Controller('exams')
 export class ExamController {
     constructor(private readonly examService: ExamService) { }
+
+    // -------------------------------------------------------
+    // EXAM ENDPOINTS
+    // -------------------------------------------------------
 
     @Post()
     @Roles('admin')
@@ -36,6 +41,20 @@ export class ExamController {
         return this.examService.getExamById(id);
     }
 
+    /**
+     * Update exam details and/or activate / deactivate it.
+     * PATCH /exams/:id  { isActive: false } → deactivate
+     */
+    @Patch(':id')
+    @Roles('admin')
+    updateExam(@Param('id') id: string, @Body() dto: UpdateExamDto) {
+        return this.examService.updateExam(id, dto);
+    }
+
+    // -------------------------------------------------------
+    // BLUEPRINT ENDPOINTS
+    // -------------------------------------------------------
+
     @Post(':id/blueprints')
     @Roles('admin')
     createBlueprint(@Param('id') id: string, @Body() dto: CreateBlueprintDto) {
@@ -47,6 +66,10 @@ export class ExamController {
         return this.examService.getBlueprintById(id);
     }
 
+    /**
+     * Update the effective date window for a blueprint
+     * (makes it active between the supplied dates).
+     */
     @Post('blueprints/:id/activate')
     @Roles('admin')
     activateBlueprint(
@@ -55,4 +78,25 @@ export class ExamController {
     ) {
         return this.examService.activateBlueprint(id, dto);
     }
+
+    /**
+     * Archive a blueprint by setting its effectiveTo to now.
+     * Archived blueprints will no longer be returned as the active blueprint
+     * for an exam.
+     */
+    @Post('blueprints/:id/archive')
+    @Roles('admin')
+    archiveBlueprint(@Param('id') id: string) {
+        return this.examService.archiveBlueprint(id);
+    }
+
+    /**
+     * Returns the currently active blueprint for an exam (by date).
+     * This is a read-only reference — it must never drive runtime test behaviour.
+     */
+    @Get(':id/blueprints/active')
+    getActiveBlueprint(@Param('id') id: string) {
+        return this.examService.getActiveBlueprint(id);
+    }
 }
+

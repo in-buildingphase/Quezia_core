@@ -9,13 +9,20 @@ import { AttemptController } from './controllers/attempt.controller';
 import { TestService } from './services/test.service';
 import { TestGenerationService } from './services/test-generation.service';
 import { TestLifecycleService } from './services/test-lifecycle.service';
+import { TestQuestionInjectionService } from './services/test-question-injection.service';
 import { QuestionModule } from '../question/question.module';
 import { ResultModule } from '../result/result.module';
 
 @Module({
     imports: [PrismaModule, ExamModule, AuthModule, QuestionModule, ResultModule],
     controllers: [TestThreadController, TestGenerationController, TestController, AttemptController],
-    providers: [TestService, TestGenerationService, TestLifecycleService],
-    exports: [TestService, TestGenerationService, TestLifecycleService],
+    providers: [
+        TestService,
+        TestGenerationService,
+        TestLifecycleService,
+        TestQuestionInjectionService,
+    ],
+    exports: [TestService, TestGenerationService, TestLifecycleService, TestQuestionInjectionService],
 })
 export class TestModule { }
+

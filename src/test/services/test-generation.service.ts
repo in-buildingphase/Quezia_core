@@ -10,7 +10,7 @@ interface SectionSnapshot {
     sectionId: string;
     subject: string;
     sequence: number;
-    sectionDurationSeconds: number;
+    sectionDurationSeconds: number | null;
     questionCount: number;
     marksPerQuestion: number;
 }
@@ -26,11 +26,16 @@ export class TestGenerationService {
     async generateInitial(threadId: string, dto: GenerateTestDto, userId: string, role: UserRole) {
         const thread = await this.prisma.testThread.findUnique({
             where: { id: threadId },
-            include: { tests: true },
+            include: { tests: true, exam: true },
         });
 
-        if (!thread) {
-            throw new NotFoundException(`Thread with ID ${threadId} not found`);
+        if (!thread) throw new NotFoundException(`Thread "${threadId}" not found`);
+
+        // ── Thread lock: exam must be active ──────────────────────────────────
+        if (!thread.exam.isActive) {
+            throw new BadRequestException(
+                `Exam "${thread.exam.name}" is inactive. Cannot generate test versions for inactive exams.`,
+            );
         }
 
         if (thread.tests.length > 0) {
@@ -47,11 +52,16 @@ export class TestGenerationService {
     async regenerate(threadId: string, dto: RegenerateTestDto, userId: string, role: UserRole) {
         const thread = await this.prisma.testThread.findUnique({
             where: { id: threadId },
-            include: { tests: { orderBy: { versionNumber: 'desc' }, take: 1 } },
+            include: { tests: { orderBy: { versionNumber: 'desc' }, take: 1 }, exam: true },
         });
 
-        if (!thread) {
-            throw new NotFoundException(`Thread with ID ${threadId} not found`);
+        if (!thread) throw new NotFoundException(`Thread "${threadId}" not found`);
+
+        // ── Thread lock: exam must be active ──────────────────────────────────
+        if (!thread.exam.isActive) {
+            throw new BadRequestException(
+                `Exam "${thread.exam.name}" is inactive. Cannot generate new test versions.`,
+            );
         }
 
         if (thread.tests.length === 0) {
@@ -65,11 +75,15 @@ export class TestGenerationService {
         const latestVersion = thread.tests[0];
         const newVersionNumber = latestVersion.versionNumber + 1;
 
-        // Merge overrides with base config if needed, but for now we follow the structural logic
         return this.createVersion(thread as any, newVersionNumber, latestVersion.followsBlueprint, latestVersion.blueprintReferenceId ?? undefined);
     }
 
-    private async createVersion(thread: TestThread & { tests: Test[] }, versionNumber: number, followsBlueprint: boolean, blueprintId?: string) {
+    private async createVersion(
+        thread: TestThread & { tests: Test[] },
+        versionNumber: number,
+        followsBlueprint: boolean,
+        blueprintId?: string,
+    ) {
         let ruleSnapshot: any = {};
         let sectionSnapshot: SectionSnapshot[] = [];
         let durationSeconds = 0;
@@ -83,7 +97,7 @@ export class TestGenerationService {
             (requestedDifficulty === 'MIXED' ? { easy: 10, medium: 10, hard: 10 } :
                 requestedDifficulty === 'EASY' ? { easy: 25, medium: 5, hard: 0 } :
                     requestedDifficulty === 'MEDIUM' ? { easy: 5, medium: 20, hard: 5 } :
-                        { easy: 0, medium: 5, hard: 25 }); // HARD
+                        { easy: 0, medium: 5, hard: 25 });
 
         if (followsBlueprint) {
             const blueprint = blueprintId
@@ -94,15 +108,12 @@ export class TestGenerationService {
                 throw new BadRequestException('No active blueprint found for this exam');
             }
 
-            // Phase 3: Structure Resolution
             ruleSnapshot = blueprint.rules[0] || {};
             const deterministicSeed = `${thread.id}-${versionNumber}`;
 
-            // Phase 4 & 5: Deterministic Call & Selection
             sectionSnapshot = await Promise.all(blueprint.sections.map(async (s) => {
-                const questionCount = 30; // Defaulting to 30 as per blueprint requirements
+                const questionCount = 30;
 
-                // Use config-driven distribution if provided, otherwise blueprint context
                 const selected = await this.questionService.selectQuestions({
                     examId: thread.examId,
                     deterministicSeed,
@@ -111,10 +122,10 @@ export class TestGenerationService {
                     filters: {
                         subjects: [{
                             name: s.subject,
-                            topics: config.topics || [], // Use prompt-specified topics if any
-                            difficultyDistribution: difficultyDistribution
-                        }]
-                    }
+                            topics: config.topics || [],
+                            difficultyDistribution: difficultyDistribution,
+                        }],
+                    },
                 });
 
                 questionsBySection.set(s.id, selected);
@@ -126,26 +137,22 @@ export class TestGenerationService {
                     sectionDurationSeconds: s.sectionDurationSeconds,
                     questionCount: selected.length,
                     marksPerQuestion: 4,
-                    _tempQuestions: selected
-                } as SectionSnapshot & { _tempQuestions: Question[] };
+                } as SectionSnapshot;
             }));
 
-            // Phase 6: Immutable Snapshotting Totals
             for (const section of sectionSnapshot) {
                 totalQuestions += section.questionCount;
-                totalMarks += (section.questionCount * section.marksPerQuestion);
-                delete (section as any)._tempQuestions;
+                totalMarks += section.questionCount * section.marksPerQuestion;
             }
 
             durationSeconds = blueprint.defaultDurationSeconds;
             blueprintId = blueprint.id;
         } else {
-            // Logic for non-blueprint generation using baseGenerationConfig
             durationSeconds = config.durationSeconds || 3600;
             totalQuestions = config.questionCount || 0;
         }
 
-        // Create the immutable Test record
+        // ── Create the immutable Test record ──────────────────────────────────
         const test = await this.prisma.test.create({
             data: {
                 threadId: thread.id,
@@ -163,7 +170,7 @@ export class TestGenerationService {
             },
         });
 
-        // Phase 6: Immutable Question Snapshotting
+        // ── Snapshot questions with sectionId ─────────────────────────────────
         let sequence = 1;
         for (const [sectionId, questions] of questionsBySection.entries()) {
             for (const q of questions) {
@@ -171,6 +178,7 @@ export class TestGenerationService {
                     data: {
                         testId: test.id,
                         questionId: q.questionId,
+                        sectionId,
                         subject: q.subject,
                         topic: q.topic,
                         subtopic: q.subtopic,
@@ -180,6 +188,7 @@ export class TestGenerationService {
                         correctAnswer: q.correctAnswer,
                         explanation: q.explanation,
                         marks: q.marks,
+                        negativeMarkValue: null,
                         tolerance: q.numericTolerance,
                         sequence: sequence++,
                     },
@@ -190,3 +199,4 @@ export class TestGenerationService {
         return test;
     }
 }
+
