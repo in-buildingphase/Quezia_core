@@ -1597,26 +1597,55 @@ _run_grading_analytics() {
       -d "{\"questionId\":\"SYSGRADE_${TS}_$(printf '%03d' $i)\",\"version\":1,\"subject\":\"Math\",\"topic\":\"Algebra\",\"subtopic\":\"Linear\",\"difficulty\":\"EASY\",\"questionType\":\"MCQ\",\"contentPayload\":{\"question\":\"Q$i: 2+$i=?\",\"options\":[{\"key\":\"A\",\"text\":\"$(($i+1))\"},{\"key\":\"B\",\"text\":\"$(($i+2))\"},{\"key\":\"C\",\"text\":\"$(($i+3))\"},{\"key\":\"D\",\"text\":\"$(($i+4))\"}]},\"correctAnswer\":\"A\",\"explanation\":\"Answer is $(($i+1))\",\"marks\":4}" > /dev/null
   done
 
-  # ── 1. Generate + publish test ────────────────────────────
-  step "1. Generate & publish grading test"
+  # ── 1. Create + populate test with seeded questions (no AI call) ─
+  # Use SYSTEM thread + followsBlueprint:false so question fetching is
+  # skipped entirely, then inject the pre-seeded questions directly.
+  # This guarantees deterministic correctAnswer values for score assertions.
+  step "1. Create & populate grading test"
   endpoint "POST" "/test-threads"
   track "Create grading thread" "POST" "/test-threads"
   RES=$(do_req -X POST "$BASE/test-threads" \
-    -H "Authorization: Bearer $LEARNER_TOKEN" \
+    -H "Authorization: Bearer $ADMIN_TOKEN" \
     -H "Content-Type: application/json" \
-    -d "{\"examId\":\"$EXAM_ID\",\"originType\":\"GENERATED\",\"title\":\"Grading Test ${TS}\",\"baseGenerationConfig\":{}}")
+    -d "{\"examId\":\"$EXAM_ID\",\"originType\":\"SYSTEM\",\"title\":\"Grading Test ${TS}\",\"baseGenerationConfig\":{}}")
   BODY=$(parse_body "$RES"); STATUS=$(parse_status "$RES") || true
   assert_http "Create grading thread" 201 "$STATUS" "$BODY"
   THREAD_ID=$(echo "$BODY" | grep -o '"id":"[^"]*"' | head -1 | cut -d'"' -f4) || true
 
-  track "Generate grading test" "POST" "/test-threads/:id/generate"
+  track "Create grading test (no blueprint, no AI)" "POST" "/test-threads/:id/generate"
   RES=$(do_req -X POST "$BASE/test-threads/$THREAD_ID/generate" \
-    -H "Authorization: Bearer $LEARNER_TOKEN" \
+    -H "Authorization: Bearer $ADMIN_TOKEN" \
     -H "Content-Type: application/json" \
-    -d "{\"followsBlueprint\":true,\"blueprintReferenceId\":\"$BLUEPRINT_ID\"}")
+    -d "{\"followsBlueprint\":false,\"blueprintReferenceId\":\"$BLUEPRINT_ID\"}")
   BODY=$(parse_body "$RES"); STATUS=$(parse_status "$RES") || true
-  assert_http "Generate grading test" 201 "$STATUS" "$BODY"
+  assert_http "Create grading test shell" 201 "$STATUS" "$BODY"
   TEST_ID=$(echo "$BODY" | grep -o '"id":"[^"]*"' | head -1 | cut -d'"' -f4) || true
+
+  # Extract sectionId from the test's sectionSnapshot for the inject call
+  local GRADE_SECTION_ID
+  RES=$(do_req -X GET "$BASE/tests/$TEST_ID" -H "Authorization: Bearer $ADMIN_TOKEN")
+  GRADE_SECTION_ID=$(parse_body "$RES" | grep -o '"sectionId":"[^"]*"' | head -1 | cut -d'"' -f4) || true
+
+  # Inject the 12 seeded questions into the test
+  track "Inject seeded questions" "POST" "/tests/:id/questions"
+  local INJECT_QS="[]"
+  INJECT_QS="["
+  for i in $(seq 1 12); do
+    INJECT_QS+="{\"questionId\":\"SYSGRADE_${TS}_$(printf '%03d' $i)\",\"questionType\":\"MCQ\",\"subject\":\"Math\",\"topic\":\"Algebra\",\"subtopic\":\"Linear\",\"difficulty\":\"EASY\",\"contentPayload\":{\"question\":\"Q$i: 2+$i=?\",\"options\":[{\"key\":\"A\",\"text\":\"$(($i+1))\"},{\"key\":\"B\",\"text\":\"$(($i+2))\"},{\"key\":\"C\",\"text\":\"$(($i+3))\"},{\"key\":\"D\",\"text\":\"$(($i+4))\"}]},\"correctAnswer\":\"A\",\"explanation\":\"Answer is $(($i+1))\",\"marks\":4}"
+    [[ $i -lt 12 ]] && INJECT_QS+=","
+  done
+  INJECT_QS+="]"
+  RES=$(do_req -X POST "$BASE/tests/$TEST_ID/questions" \
+    -H "Authorization: Bearer $ADMIN_TOKEN" \
+    -H "Content-Type: application/json" \
+    -d "{\"sectionId\":\"$GRADE_SECTION_ID\",\"questions\":$INJECT_QS}")
+  STATUS=$(parse_status "$RES") || true
+  if [[ "$STATUS" == "200" || "$STATUS" == "201" ]]; then
+    pass "Injected 12 grading questions"
+    SECTION_P=$(( SECTION_P+1 ))
+  else
+    warn "Question injection returned HTTP $STATUS — grading score assertions may be unreliable"
+  fi
 
   track "Publish grading test" "PATCH" "/tests/:id/publish"
   RES=$(do_req -X PATCH "$BASE/tests/$TEST_ID/publish" \
@@ -1814,17 +1843,34 @@ _run_transaction_atomicity() {
     -H "Content-Type: application/json" \
     -d "{\"packId\":\"$_PACK_ID\"}" > /dev/null
 
+  # Use SYSTEM thread + followsBlueprint:false so AI is never called.
+  # Inject the 10 seeded questions so the attempt has known questions.
   RES=$(do_req -X POST "$BASE/test-threads" \
-    -H "Authorization: Bearer $LEARNER_TOKEN" \
+    -H "Authorization: Bearer $ADMIN_TOKEN" \
     -H "Content-Type: application/json" \
-    -d "{\"examId\":\"$EXAM_ID\",\"originType\":\"GENERATED\",\"title\":\"TxnTest ${TS}\",\"baseGenerationConfig\":{}}")
+    -d "{\"examId\":\"$EXAM_ID\",\"originType\":\"SYSTEM\",\"title\":\"TxnTest ${TS}\",\"baseGenerationConfig\":{}}")
   THREAD_ID=$(parse_body "$RES" | grep -o '"id":"[^"]*"' | head -1 | cut -d'"' -f4) || true
 
   RES=$(do_req -X POST "$BASE/test-threads/$THREAD_ID/generate" \
-    -H "Authorization: Bearer $LEARNER_TOKEN" \
+    -H "Authorization: Bearer $ADMIN_TOKEN" \
     -H "Content-Type: application/json" \
-    -d "{\"followsBlueprint\":true,\"blueprintReferenceId\":\"$BLUEPRINT_ID\"}")
+    -d "{\"followsBlueprint\":false,\"blueprintReferenceId\":\"$BLUEPRINT_ID\"}")
   TEST_ID=$(parse_body "$RES" | grep -o '"id":"[^"]*"' | head -1 | cut -d'"' -f4) || true
+
+  local TXN_SECTION_ID
+  RES=$(do_req -X GET "$BASE/tests/$TEST_ID" -H "Authorization: Bearer $ADMIN_TOKEN")
+  TXN_SECTION_ID=$(parse_body "$RES" | grep -o '"sectionId":"[^"]*"' | head -1 | cut -d'"' -f4) || true
+
+  local TXN_INJECT_QS="["
+  for i in $(seq 1 10); do
+    TXN_INJECT_QS+="{\"questionId\":\"SYSTXN_${TS}_$(printf '%03d' $i)\",\"questionType\":\"MCQ\",\"subject\":\"Math\",\"topic\":\"Algebra\",\"subtopic\":\"Linear\",\"difficulty\":\"EASY\",\"contentPayload\":{\"question\":\"Txn Q$i: 1+$i=?\",\"options\":[{\"key\":\"A\",\"text\":\"$(($i+1))\"},{\"key\":\"B\",\"text\":\"$(($i+2))\"},{\"key\":\"C\",\"text\":\"$(($i+3))\"},{\"key\":\"D\",\"text\":\"$(($i+4))\"}]},\"correctAnswer\":\"A\",\"explanation\":\"$(($i+1))\",\"marks\":4}"
+    [[ $i -lt 10 ]] && TXN_INJECT_QS+=","
+  done
+  TXN_INJECT_QS+="]"
+  do_req -X POST "$BASE/tests/$TEST_ID/questions" \
+    -H "Authorization: Bearer $ADMIN_TOKEN" \
+    -H "Content-Type: application/json" \
+    -d "{\"sectionId\":\"$TXN_SECTION_ID\",\"questions\":$TXN_INJECT_QS}" > /dev/null
 
   do_req -X PATCH "$BASE/tests/$TEST_ID/publish" \
     -H "Authorization: Bearer $ADMIN_TOKEN" > /dev/null
@@ -1969,17 +2015,33 @@ _run_concurrency() {
       -d "{\"questionId\":\"SYSCONC_${TS}_$(printf '%03d' $i)\",\"version\":1,\"subject\":\"Math\",\"topic\":\"Algebra\",\"subtopic\":\"Linear\",\"difficulty\":\"EASY\",\"questionType\":\"MCQ\",\"contentPayload\":{\"question\":\"Conc Q$i: $i+1=?\",\"options\":[{\"key\":\"A\",\"text\":\"$(($i+1))\"},{\"key\":\"B\",\"text\":\"$(($i+2))\"},{\"key\":\"C\",\"text\":\"$(($i+3))\"},{\"key\":\"D\",\"text\":\"$(($i+4))\"}]},\"correctAnswer\":\"A\",\"explanation\":\"ans\",\"marks\":4}" > /dev/null
   done
 
+  # SYSTEM thread so no AI call; inject seeded questions for a well-defined test.
   RES=$(do_req -X POST "$BASE/test-threads" \
-    -H "Authorization: Bearer $LEARNER_TOKEN" \
+    -H "Authorization: Bearer $ADMIN_TOKEN" \
     -H "Content-Type: application/json" \
-    -d "{\"examId\":\"$EXAM_ID\",\"originType\":\"GENERATED\",\"title\":\"ConcTest ${TS}\",\"baseGenerationConfig\":{}}")
+    -d "{\"examId\":\"$EXAM_ID\",\"originType\":\"SYSTEM\",\"title\":\"ConcTest ${TS}\",\"baseGenerationConfig\":{}}")
   THREAD_ID=$(parse_body "$RES" | grep -o '"id":"[^"]*"' | head -1 | cut -d'"' -f4) || true
 
   RES=$(do_req -X POST "$BASE/test-threads/$THREAD_ID/generate" \
-    -H "Authorization: Bearer $LEARNER_TOKEN" \
+    -H "Authorization: Bearer $ADMIN_TOKEN" \
     -H "Content-Type: application/json" \
-    -d "{\"followsBlueprint\":true,\"blueprintReferenceId\":\"$BLUEPRINT_ID\"}")
+    -d "{\"followsBlueprint\":false,\"blueprintReferenceId\":\"$BLUEPRINT_ID\"}")
   TEST_ID=$(parse_body "$RES" | grep -o '"id":"[^"]*"' | head -1 | cut -d'"' -f4) || true
+
+  local CONC_SECTION_ID
+  RES=$(do_req -X GET "$BASE/tests/$TEST_ID" -H "Authorization: Bearer $ADMIN_TOKEN")
+  CONC_SECTION_ID=$(parse_body "$RES" | grep -o '"sectionId":"[^"]*"' | head -1 | cut -d'"' -f4) || true
+
+  local CONC_INJECT_QS="["
+  for i in $(seq 1 10); do
+    CONC_INJECT_QS+="{\"questionId\":\"SYSCONC_${TS}_$(printf '%03d' $i)\",\"questionType\":\"MCQ\",\"subject\":\"Math\",\"topic\":\"Algebra\",\"subtopic\":\"Linear\",\"difficulty\":\"EASY\",\"contentPayload\":{\"question\":\"Conc Q$i: $i+1=?\",\"options\":[{\"key\":\"A\",\"text\":\"$(($i+1))\"},{\"key\":\"B\",\"text\":\"$(($i+2))\"},{\"key\":\"C\",\"text\":\"$(($i+3))\"},{\"key\":\"D\",\"text\":\"$(($i+4))\"}]},\"correctAnswer\":\"A\",\"explanation\":\"ans\",\"marks\":4}"
+    [[ $i -lt 10 ]] && CONC_INJECT_QS+=","
+  done
+  CONC_INJECT_QS+="]"
+  do_req -X POST "$BASE/tests/$TEST_ID/questions" \
+    -H "Authorization: Bearer $ADMIN_TOKEN" \
+    -H "Content-Type: application/json" \
+    -d "{\"sectionId\":\"$CONC_SECTION_ID\",\"questions\":$CONC_INJECT_QS}" > /dev/null
 
   do_req -X PATCH "$BASE/tests/$TEST_ID/publish" \
     -H "Authorization: Bearer $ADMIN_TOKEN" > /dev/null
@@ -2421,23 +2483,53 @@ _run_question_immutability() {
     SECTION_P=$(( SECTION_P+1 ))
   fi
 
-  # ── 3. Generate test — snapshot must use canonical content ─
-  step "3. Generate test — snapshot must capture question content at generation time"
+  # ── 3. Create test shell + inject canonical question — snapshot must use injected content ─
+  # Use SYSTEM + inject pattern so the snapshot contains the known canonical question,
+  # not unknown AI-returned questions. This preserves the intent of the snapshot test.
+  step "3. Create test shell + inject canonical question for snapshot test"
   endpoint "POST" "/test-threads"
   RES=$(do_req -X POST "$BASE/test-threads" \
-    -H "Authorization: Bearer $LEARNER_TOKEN" \
+    -H "Authorization: Bearer $ADMIN_TOKEN" \
     -H "Content-Type: application/json" \
-    -d "{\"examId\":\"$EXAM_ID\",\"originType\":\"GENERATED\",\"title\":\"ImmTest ${TS}\",\"baseGenerationConfig\":{}}")
+    -d "{\"examId\":\"$EXAM_ID\",\"originType\":\"SYSTEM\",\"title\":\"ImmTest ${TS}\",\"baseGenerationConfig\":{\"subject\":\"Math\"}}")
   THREAD_ID=$(parse_body "$RES" | grep -o '"id":"[^"]*"' | head -1 | cut -d'"' -f4) || true
 
   RES=$(do_req -X POST "$BASE/test-threads/$THREAD_ID/generate" \
-    -H "Authorization: Bearer $LEARNER_TOKEN" \
+    -H "Authorization: Bearer $ADMIN_TOKEN" \
     -H "Content-Type: application/json" \
-    -d "{\"followsBlueprint\":true,\"blueprintReferenceId\":\"$BLUEPRINT_ID\"}")
+    -d "{\"followsBlueprint\":false,\"blueprintReferenceId\":\"$BLUEPRINT_ID\"}")
   BODY=$(parse_body "$RES"); STATUS=$(parse_status "$RES") || true
-  assert_http "Generate test (for snapshot)" 201 "$STATUS" "$BODY"
+  assert_http "Create test shell (for snapshot)" 201 "$STATUS" "$BODY"
   TEST_ID=$(echo "$BODY" | grep -o '"id":"[^"]*"' | head -1 | cut -d'"' -f4) || true
   info "Immutability test ID: $TEST_ID"
+
+  local IMM_SECTION_ID
+  RES=$(do_req -X GET "$BASE/tests/$TEST_ID" -H "Authorization: Bearer $ADMIN_TOKEN")
+  IMM_SECTION_ID=$(parse_body "$RES" | grep -o '"sectionId":"[^"]*"' | head -1 | cut -d'"' -f4) || true
+
+  # Inject the canonical seeded question so the snapshot contains known content
+  local IMM_INJECT_QS="["
+  for i in $(seq 1 10); do
+    local qid
+    if [[ $i -eq 1 ]]; then
+      qid="$Q_ORIG_ID"
+    else
+      qid="SYSIMM_${TS}_$(printf '%03d' $i)"
+    fi
+    local qtxt
+    if [[ $i -eq 1 ]]; then
+      qtxt="Original question text"
+    else
+      qtxt="Imm Q$i: 1+$i=?"
+    fi
+    IMM_INJECT_QS+="{\"questionId\":\"$qid\",\"questionType\":\"MCQ\",\"subject\":\"Math\",\"topic\":\"Algebra\",\"subtopic\":\"Linear\",\"difficulty\":\"EASY\",\"contentPayload\":{\"question\":\"$qtxt\",\"options\":[{\"key\":\"A\",\"text\":\"Opt A\"},{\"key\":\"B\",\"text\":\"Opt B\"},{\"key\":\"C\",\"text\":\"Opt C\"},{\"key\":\"D\",\"text\":\"Opt D\"}]},\"correctAnswer\":\"A\",\"explanation\":\"ans\",\"marks\":4}"
+    [[ $i -lt 10 ]] && IMM_INJECT_QS+=","
+  done
+  IMM_INJECT_QS+="]"
+  do_req -X POST "$BASE/tests/$TEST_ID/questions" \
+    -H "Authorization: Bearer $ADMIN_TOKEN" \
+    -H "Content-Type: application/json" \
+    -d "{\"sectionId\":\"$IMM_SECTION_ID\",\"questions\":$IMM_INJECT_QS}" > /dev/null
 
   track "Snapshot contains sectionSnapshot" "GET" "/tests/:id"
   RES=$(do_req -X GET "$BASE/tests/$TEST_ID" \
@@ -3007,19 +3099,36 @@ _run_analytics_aggregation() {
   done
 
   # Create and publish TWO separate tests from the same exam
+  # Helper: creates a SYSTEM test shell and injects the 10 seeded SYSAGG questions.
+  # This replaces the old GENERATED pattern so the AI service is not called,
+  # and the questions have a known correctAnswer ("A") for score-assertion tests.
   _create_test_in_exam() {
-    local admin_tok="$1" exam_id="$2" bp_id="$3" title="$4" owner_tok="$5"
-    local RES tid tid2 test_id
+    local admin_tok="$1" exam_id="$2" bp_id="$3" title="$4" _unused_owner_tok="$5"
+    local RES tid test_id sec_id inject_qs
     RES=$(do_req -X POST "$BASE/test-threads" \
-      -H "Authorization: Bearer $owner_tok" \
+      -H "Authorization: Bearer $admin_tok" \
       -H "Content-Type: application/json" \
-      -d "{\"examId\":\"$exam_id\",\"originType\":\"GENERATED\",\"title\":\"$title\",\"baseGenerationConfig\":{}}")
+      -d "{\"examId\":\"$exam_id\",\"originType\":\"SYSTEM\",\"title\":\"$title\",\"baseGenerationConfig\":{}}")
     tid=$(parse_body "$RES" | grep -o '"id":"[^"]*"' | head -1 | cut -d'"' -f4) || true
     RES=$(do_req -X POST "$BASE/test-threads/$tid/generate" \
-      -H "Authorization: Bearer $owner_tok" \
+      -H "Authorization: Bearer $admin_tok" \
       -H "Content-Type: application/json" \
-      -d "{\"followsBlueprint\":true,\"blueprintReferenceId\":\"$bp_id\"}")
+      -d "{\"followsBlueprint\":false,\"blueprintReferenceId\":\"$bp_id\"}")
     test_id=$(parse_body "$RES" | grep -o '"id":"[^"]*"' | head -1 | cut -d'"' -f4) || true
+    # Resolve sectionId from the test shell for injection
+    RES=$(do_req -X GET "$BASE/tests/$test_id" -H "Authorization: Bearer $admin_tok")
+    sec_id=$(parse_body "$RES" | grep -o '"sectionId":"[^"]*"' | head -1 | cut -d'"' -f4) || true
+    # Build injection payload from the already-seeded SYSAGG questions
+    inject_qs="["
+    for i in $(seq 1 10); do
+      inject_qs+="{\"questionId\":\"SYSAGG_${TS}_$(printf '%03d' $i)\",\"questionType\":\"MCQ\",\"subject\":\"Math\",\"topic\":\"Algebra\",\"subtopic\":\"Linear\",\"difficulty\":\"EASY\",\"contentPayload\":{\"question\":\"AggQ$i: 1+$i=?\",\"options\":[{\"key\":\"A\",\"text\":\"$(($i+1))\"},{\"key\":\"B\",\"text\":\"$(($i+2))\"},{\"key\":\"C\",\"text\":\"$(($i+3))\"},{\"key\":\"D\",\"text\":\"$(($i+4))\"}]},\"correctAnswer\":\"A\",\"explanation\":\"ans\",\"marks\":4}"
+      [[ $i -lt 10 ]] && inject_qs+=","
+    done
+    inject_qs+="]"
+    do_req -X POST "$BASE/tests/$test_id/questions" \
+      -H "Authorization: Bearer $admin_tok" \
+      -H "Content-Type: application/json" \
+      -d "{\"sectionId\":\"$sec_id\",\"questions\":$inject_qs}" > /dev/null
     do_req -X PATCH "$BASE/tests/$test_id/publish" -H "Authorization: Bearer $admin_tok" > /dev/null
     echo "$test_id"
   }
@@ -3545,13 +3654,29 @@ _run_archival_propagation() {
   RES=$(do_req -X POST "$BASE/test-threads" \
     -H "Authorization: Bearer $ADMIN_TOKEN" \
     -H "Content-Type: application/json" \
-    -d "{\"examId\":\"$EXAM_ID\",\"originType\":\"SYSTEM\",\"title\":\"ArchTest ${TS}\",\"baseGenerationConfig\":{}}")
+    -d "{\"examId\":\"$EXAM_ID\",\"originType\":\"SYSTEM\",\"title\":\"ArchTest ${TS}\",\"baseGenerationConfig\":{\"subject\":\"Math\",\"questionCount\":10}}")
   THREAD_ID=$(parse_body "$RES" | grep -o '"id":"[^"]*"' | head -1 | cut -d'"' -f4) || true
   RES=$(do_req -X POST "$BASE/test-threads/$THREAD_ID/generate" \
     -H "Authorization: Bearer $ADMIN_TOKEN" \
     -H "Content-Type: application/json" \
-    -d "{\"followsBlueprint\":true,\"blueprintReferenceId\":\"$BLUEPRINT_ID\"}")
+    -d "{\"followsBlueprint\":false,\"blueprintReferenceId\":\"$BLUEPRINT_ID\"}")
   TEST_ID=$(parse_body "$RES" | grep -o '"id":"[^"]*"' | head -1 | cut -d'"' -f4) || true
+
+  local ARCH_SECTION_ID
+  RES=$(do_req -X GET "$BASE/tests/$TEST_ID" -H "Authorization: Bearer $ADMIN_TOKEN")
+  ARCH_SECTION_ID=$(parse_body "$RES" | grep -o '"sectionId":"[^"]*"' | head -1 | cut -d'"' -f4) || true
+
+  local ARCH_INJECT_QS="["
+  for i in $(seq 1 10); do
+    ARCH_INJECT_QS+="{\"questionId\":\"SYSARCH_${TS}_$(printf '%03d' $i)\",\"questionType\":\"MCQ\",\"subject\":\"Math\",\"topic\":\"Algebra\",\"subtopic\":\"Linear\",\"difficulty\":\"EASY\",\"contentPayload\":{\"question\":\"ArchQ$i\",\"options\":[{\"key\":\"A\",\"text\":\"Yes\"},{\"key\":\"B\",\"text\":\"No\"},{\"key\":\"C\",\"text\":\"Maybe\"},{\"key\":\"D\",\"text\":\"Never\"}]},\"correctAnswer\":\"A\",\"explanation\":\"ans\",\"marks\":4}"
+    [[ $i -lt 10 ]] && ARCH_INJECT_QS+=","
+  done
+  ARCH_INJECT_QS+="]"
+  do_req -X POST "$BASE/tests/$TEST_ID/questions" \
+    -H "Authorization: Bearer $ADMIN_TOKEN" \
+    -H "Content-Type: application/json" \
+    -d "{\"sectionId\":\"$ARCH_SECTION_ID\",\"questions\":$ARCH_INJECT_QS}" > /dev/null
+
   do_req -X PATCH "$BASE/tests/$TEST_ID/publish" -H "Authorization: Bearer $ADMIN_TOKEN" > /dev/null
 
   # Provision subscription so learner can start attempts
@@ -3862,13 +3987,29 @@ _run_partial_submission() {
   RES=$(do_req -X POST "$BASE/test-threads" \
     -H "Authorization: Bearer $ADMIN_TOKEN" \
     -H "Content-Type: application/json" \
-    -d "{\"examId\":\"$EXAM_ID\",\"originType\":\"SYSTEM\",\"title\":\"PsubTest ${TS}\",\"baseGenerationConfig\":{}}")
+    -d "{\"examId\":\"$EXAM_ID\",\"originType\":\"SYSTEM\",\"title\":\"PsubTest ${TS}\",\"baseGenerationConfig\":{\"subject\":\"Math\",\"questionCount\":10}}")
   THREAD_ID=$(parse_body "$RES" | grep -o '"id":"[^"]*"' | head -1 | cut -d'"' -f4) || true
   RES=$(do_req -X POST "$BASE/test-threads/$THREAD_ID/generate" \
     -H "Authorization: Bearer $ADMIN_TOKEN" \
     -H "Content-Type: application/json" \
-    -d "{\"followsBlueprint\":true,\"blueprintReferenceId\":\"$BLUEPRINT_ID\"}")
+    -d "{\"followsBlueprint\":false,\"blueprintReferenceId\":\"$BLUEPRINT_ID\"}")
   TEST_ID=$(parse_body "$RES" | grep -o '"id":"[^"]*"' | head -1 | cut -d'"' -f4) || true
+
+  local PSUB_SECTION_ID
+  RES=$(do_req -X GET "$BASE/tests/$TEST_ID" -H "Authorization: Bearer $ADMIN_TOKEN")
+  PSUB_SECTION_ID=$(parse_body "$RES" | grep -o '"sectionId":"[^"]*"' | head -1 | cut -d'"' -f4) || true
+
+  local PSUB_INJECT_QS="["
+  for i in $(seq 1 10); do
+    PSUB_INJECT_QS+="{\"questionId\":\"SYSPSUB_${TS}_$(printf '%03d' $i)\",\"questionType\":\"MCQ\",\"subject\":\"Math\",\"topic\":\"Algebra\",\"subtopic\":\"Linear\",\"difficulty\":\"EASY\",\"contentPayload\":{\"question\":\"PsubQ$i: 1+$i=?\",\"options\":[{\"key\":\"A\",\"text\":\"$(($i+1))\"},{\"key\":\"B\",\"text\":\"$(($i+2))\"},{\"key\":\"C\",\"text\":\"$(($i+3))\"},{\"key\":\"D\",\"text\":\"$(($i+4))\"}]},\"correctAnswer\":\"A\",\"explanation\":\"ans\",\"marks\":4}"
+    [[ $i -lt 10 ]] && PSUB_INJECT_QS+=","
+  done
+  PSUB_INJECT_QS+="]"
+  do_req -X POST "$BASE/tests/$TEST_ID/questions" \
+    -H "Authorization: Bearer $ADMIN_TOKEN" \
+    -H "Content-Type: application/json" \
+    -d "{\"sectionId\":\"$PSUB_SECTION_ID\",\"questions\":$PSUB_INJECT_QS}" > /dev/null
+
   do_req -X PATCH "$BASE/tests/$TEST_ID/publish" -H "Authorization: Bearer $ADMIN_TOKEN" > /dev/null
 
   RES=$(do_req -X GET "$BASE/tests/$TEST_ID/questions" -H "Authorization: Bearer $ADMIN_TOKEN")
@@ -4103,17 +4244,38 @@ _run_numeric_tolerance() {
       -d "{\"questionId\":\"SYSNUM_${TS}_$(printf '%03d' $i)\",\"version\":1,\"subject\":\"Physics\",\"topic\":\"Mechanics\",\"subtopic\":\"Velocity\",\"difficulty\":\"EASY\",\"questionType\":\"NUMERIC\",\"contentPayload\":{\"question\":\"What is velocity? (answer near 10, tolerance 0.5)\"},\"correctAnswer\":\"10\",\"explanation\":\"v=10 m/s\",\"marks\":4,\"numericTolerance\":0.5}" > /dev/null
   done
 
+  # Create test shell without AI (followsBlueprint:false), then inject
+  # the 10 known NUMERIC questions so boundary assertions are deterministic.
   local NTHREAD_ID NTEST_ID
   RES=$(do_req -X POST "$BASE/test-threads" \
-    -H "Authorization: Bearer $LEARNER_TOKEN" \
+    -H "Authorization: Bearer $ADMIN_TOKEN" \
     -H "Content-Type: application/json" \
-    -d "{\"examId\":\"$EXAM_ID\",\"originType\":\"GENERATED\",\"title\":\"NumTest ${TS}\",\"baseGenerationConfig\":{}}")
+    -d "{\"examId\":\"$EXAM_ID\",\"originType\":\"SYSTEM\",\"title\":\"NumTest ${TS}\",\"baseGenerationConfig\":{\"subject\":\"Physics\",\"questionCount\":10}}")
   NTHREAD_ID=$(parse_body "$RES" | grep -o '"id":"[^"]*"' | head -1 | cut -d'"' -f4) || true
   RES=$(do_req -X POST "$BASE/test-threads/$NTHREAD_ID/generate" \
-    -H "Authorization: Bearer $LEARNER_TOKEN" \
+    -H "Authorization: Bearer $ADMIN_TOKEN" \
     -H "Content-Type: application/json" \
-    -d "{\"followsBlueprint\":true,\"blueprintReferenceId\":\"$BLUEPRINT_ID\"}")
+    -d "{\"followsBlueprint\":false,\"blueprintReferenceId\":\"$BLUEPRINT_ID\"}")
   NTEST_ID=$(parse_body "$RES" | grep -o '"id":"[^"]*"' | head -1 | cut -d'"' -f4) || true
+
+  # Extract sectionId from test sectionSnapshot for question injection
+  local NUM_SECTION_ID
+  RES=$(do_req -X GET "$BASE/tests/$NTEST_ID" -H "Authorization: Bearer $ADMIN_TOKEN")
+  NUM_SECTION_ID=$(parse_body "$RES" | grep -o '"sectionId":"[^"]*"' | head -1 | cut -d'"' -f4) || true
+
+  # Inject the 10 seeded NUMERIC questions
+  local NUM_INJECT_QS
+  NUM_INJECT_QS="["
+  for i in $(seq 1 10); do
+    NUM_INJECT_QS+="{\"questionId\":\"SYSNUM_${TS}_$(printf '%03d' $i)\",\"questionType\":\"NUMERIC\",\"subject\":\"Physics\",\"topic\":\"Mechanics\",\"subtopic\":\"Velocity\",\"difficulty\":\"EASY\",\"contentPayload\":{\"question\":\"What is velocity? (answer near 10, tolerance 0.5)\"},\"correctAnswer\":\"10\",\"explanation\":\"v=10 m/s\",\"marks\":4,\"numericTolerance\":0.5}"
+    [[ $i -lt 10 ]] && NUM_INJECT_QS+=","
+  done
+  NUM_INJECT_QS+="]"
+  do_req -X POST "$BASE/tests/$NTEST_ID/questions" \
+    -H "Authorization: Bearer $ADMIN_TOKEN" \
+    -H "Content-Type: application/json" \
+    -d "{\"sectionId\":\"$NUM_SECTION_ID\",\"questions\":$NUM_INJECT_QS}" > /dev/null
+
   do_req -X PATCH "$BASE/tests/$NTEST_ID/publish" -H "Authorization: Bearer $ADMIN_TOKEN" > /dev/null
 
   # Get test questions
@@ -4150,11 +4312,19 @@ _run_numeric_tolerance() {
   # ── 6. All exact (10.0) → full marks (max score) ──────────
   step "6. All answers = 10.0 (exact correct) → max score"
   endpoint "POST" "/attempts/:id/submit-test"
-  local EXACT_LEARNER_TOKEN
+  local EXACT_LEARNER_TOKEN _PACK_ID
+  RES=$(do_req -X POST "$BASE/subscriptions/packs" \
+    -H "Authorization: Bearer $ADMIN_TOKEN" \
+    -H "Content-Type: application/json" \
+    -d "{\"examId\":\"$EXAM_ID\",\"name\":\"Num Pass\",\"durationDays\":30,\"price\":100,\"isActive\":true}")
+  _PACK_ID=$(parse_body "$RES" | grep -o '"id":"[^"]*"' | head -1 | cut -d'"' -f4) || true
+
   RES=$(do_req -X POST "$BASE/auth/register" \
     -H "Content-Type: application/json" \
     -d "{\"email\":\"sys_num_exact_${TS}@quezia.dev\",\"username\":\"sys_num_ex_${TS}\",\"password\":\"Test@1234\"}")
   EXACT_LEARNER_TOKEN=$(parse_body "$RES" | grep -o '"accessToken":"[^"]*"' | cut -d'"' -f4) || true
+  do_req -X POST "$BASE/subscriptions/subscribe" -H "Authorization: Bearer $EXACT_LEARNER_TOKEN" -H "Content-Type: application/json" -d "{\"packId\":\"$_PACK_ID\"}" > /dev/null
+
   track "NUMERIC exact boundary" "POST" "/attempts/:id/submit-test"
   local ARGS_EXACT=(); for _ in "${NQS[@]}"; do ARGS_EXACT+=("10"); done
   local BODY_EXACT; BODY_EXACT=$(_do_numeric_attempt "$EXACT_LEARNER_TOKEN" "$NTEST_ID" "${ARGS_EXACT[@]}")
@@ -4170,6 +4340,7 @@ _run_numeric_tolerance() {
     -H "Content-Type: application/json" \
     -d "{\"email\":\"sys_num_upper_${TS}@quezia.dev\",\"username\":\"sys_num_up_${TS}\",\"password\":\"Test@1234\"}")
   UPPER_TOKEN=$(parse_body "$RES" | grep -o '"accessToken":"[^"]*"' | cut -d'"' -f4) || true
+  do_req -X POST "$BASE/subscriptions/subscribe" -H "Authorization: Bearer $UPPER_TOKEN" -H "Content-Type: application/json" -d "{\"packId\":\"$_PACK_ID\"}" > /dev/null
   track "NUMERIC upper boundary" "POST" "/attempts/:id/submit-test"
   local ARGS_UPPER=(); for _ in "${NQS[@]}"; do ARGS_UPPER+=("10.5"); done
   local BODY_UPPER; BODY_UPPER=$(_do_numeric_attempt "$UPPER_TOKEN" "$NTEST_ID" "${ARGS_UPPER[@]}")
@@ -4197,6 +4368,7 @@ _run_numeric_tolerance() {
     -H "Content-Type: application/json" \
     -d "{\"email\":\"sys_num_out_${TS}@quezia.dev\",\"username\":\"sys_num_ot_${TS}\",\"password\":\"Test@1234\"}")
   OUTSIDE_TOKEN=$(parse_body "$RES" | grep -o '"accessToken":"[^"]*"' | cut -d'"' -f4) || true
+  do_req -X POST "$BASE/subscriptions/subscribe" -H "Authorization: Bearer $OUTSIDE_TOKEN" -H "Content-Type: application/json" -d "{\"packId\":\"$_PACK_ID\"}" > /dev/null
   track "NUMERIC just-outside boundary" "POST" "/attempts/:id/submit-test"
   local ARGS_OUT=(); for _ in "${NQS[@]}"; do ARGS_OUT+=("10.51"); done
   local BODY_OUT; BODY_OUT=$(_do_numeric_attempt "$OUTSIDE_TOKEN" "$NTEST_ID" "${ARGS_OUT[@]}")
@@ -4224,6 +4396,7 @@ _run_numeric_tolerance() {
     -H "Content-Type: application/json" \
     -d "{\"email\":\"sys_num_lower_${TS}@quezia.dev\",\"username\":\"sys_num_lo_${TS}\",\"password\":\"Test@1234\"}")
   LOWER_TOKEN=$(parse_body "$RES" | grep -o '"accessToken":"[^"]*"' | cut -d'"' -f4) || true
+  do_req -X POST "$BASE/subscriptions/subscribe" -H "Authorization: Bearer $LOWER_TOKEN" -H "Content-Type: application/json" -d "{\"packId\":\"$_PACK_ID\"}" > /dev/null
   track "NUMERIC lower boundary" "POST" "/attempts/:id/submit-test"
   local ARGS_LOWER=(); for _ in "${NQS[@]}"; do ARGS_LOWER+=("9.5"); done
   local BODY_LOWER; BODY_LOWER=$(_do_numeric_attempt "$LOWER_TOKEN" "$NTEST_ID" "${ARGS_LOWER[@]}")
@@ -4292,6 +4465,125 @@ run_tests() {
   _run_tests_attempts
   _run_partial_submission
   _run_archival_propagation
+  section_end
+}
+
+# =============================================================================
+#  § 14  AI INTEGRATION & ANALYSIS E2E
+# 
+#  Validates the live JEE AI Service integration:
+#    - POST /test-threads/:id/generate -> Hits AI service -> Creates test
+#    - Submit attempt -> Triggers POST /ai/analyze asynchronously
+#    - Validates InsightLog creation via GET /analytics/insights/:examId
+#
+#  NOTE: Expect a ~30-60 second pause as the Render free-tier AI spins up.
+# =============================================================================
+_run_ai_integration() {
+  local RES BODY STATUS
+  local ADMIN_TOKEN LEARNER_TOKEN
+  local EXAM_ID THREAD_ID TEST_ID ATT_ID QBODY
+
+  require_admin_token || return 1
+
+  # Create Learner
+  RES=$(do_req -X POST "$BASE/auth/register" \
+    -H "Content-Type: application/json" \
+    -d "{\"email\":\"sys_ai_${TS}@quezia.dev\",\"username\":\"sys_ai_${TS}\",\"password\":\"Test@1234\"}")
+  LEARNER_TOKEN=$(parse_body "$RES" | grep -o '"accessToken":"[^"]*"' | cut -d'"' -f4) || true
+
+  # Create Exam for AI tests
+  RES=$(do_req -X POST "$BASE/exams" \
+    -H "Authorization: Bearer $ADMIN_TOKEN" \
+    -H "Content-Type: application/json" \
+    -d "{\"name\":\"SYSAI_${TS}\",\"isActive\":true}")
+  EXAM_ID=$(parse_body "$RES" | grep -o '"id":"[^"]*"' | head -1 | cut -d'"' -f4) || true
+
+  # ── 1. Create GENERATED Thread ──────────────────────────────
+  step "1. Learner POST /test-threads (originType: GENERATED)"
+  endpoint "POST" "/test-threads"
+  track "Create AI Thread" "POST" "/test-threads"
+  RES=$(do_req -X POST "$BASE/test-threads" \
+    -H "Authorization: Bearer $LEARNER_TOKEN" \
+    -H "Content-Type: application/json" \
+    -d "{\"examId\":\"$EXAM_ID\",\"originType\":\"GENERATED\",\"title\":\"JEE AI Mock Test\",\"baseGenerationConfig\":{\"difficulty\":\"EASY\",\"questionCount\":5}}")
+  BODY=$(parse_body "$RES"); STATUS=$(parse_status "$RES") || true
+  assert_http "Create GENERATED Thread" 201 "$STATUS" "$BODY"
+  THREAD_ID=$(echo "$BODY" | grep -o '"id":"[^"]*"' | head -1 | cut -d'"' -f4) || true
+
+  # ── 2. Request AI Test Generation ───────────────────────────
+  step "2. Learner POST /test-threads/:id/generate (Trigger JEE AI API)"
+  info "Please wait... The external JEE AI API may take up to 60 seconds to cold start."
+  endpoint "POST" "/test-threads/:id/generate"
+  track "Generate AI Test" "POST" "/test-threads/:id/generate"
+  RES=$(do_req -X POST "$BASE/test-threads/$THREAD_ID/generate" \
+    -H "Authorization: Bearer $LEARNER_TOKEN" \
+    -H "Content-Type: application/json" \
+    -d "{\"followsBlueprint\":false}")
+  BODY=$(parse_body "$RES"); STATUS=$(parse_status "$RES") || true
+  assert_http "Generate AI Test" 201 "$STATUS" "$BODY"
+  assert_field "  AI parsed totalQuestions" "totalQuestions" "$BODY"
+  
+  # A GENERATED test should automatically be published
+  assert_contains "  status PUBLISHED" '"status":"PUBLISHED"' "$BODY"
+  TEST_ID=$(echo "$BODY" | grep -o '"id":"[^"]*"' | head -1 | cut -d'"' -f4) || true
+  info "AI Generated Test ID: $TEST_ID"
+
+  # ── 3. Start AI Test Attempt ────────────────────────────────
+  step "3. Learner POST /attempts/:id/start (No subscription needed for GENERATED)"
+  endpoint "POST" "/attempts/:testId/start"
+  track "Start AI Attempt" "POST" "/attempts/:testId/start"
+  RES=$(do_req -X POST "$BASE/attempts/$TEST_ID/start" -H "Authorization: Bearer $LEARNER_TOKEN")
+  BODY=$(parse_body "$RES"); STATUS=$(parse_status "$RES") || true
+  assert_http "Start GENERATED Attempt" 201 "$STATUS" "$BODY"
+  ATT_ID=$(echo "$BODY" | grep -o '"id":"[^"]*"' | head -1 | cut -d'"' -f4) || true
+
+  # ── 4. Submit Answers ───────────────────────────────────────
+  step "4. Learner answers the AI-generated questions"
+  RES=$(do_req -X GET "$BASE/tests/$TEST_ID/questions" -H "Authorization: Bearer $LEARNER_TOKEN")
+  QBODY=$(parse_body "$RES") || true
+  info "QBODY Output:"
+  echo "$QBODY" | head -n 20
+  local -a AQS=(); while IFS= read -r q; do [[ -n "$q" ]] && AQS+=("$q"); done < <(echo "$QBODY" | grep -o '"questionId":"[^"]*"' | cut -d'"' -f4) || true
+  info "Found ${#AQS[@]} questions from AI."
+
+  if [[ ${#AQS[@]} -gt 0 ]]; then
+    for qid in "${AQS[@]}"; do
+      do_req -X POST "$BASE/attempts/$ATT_ID/submit" \
+        -H "Authorization: Bearer $LEARNER_TOKEN" \
+        -H "Content-Type: application/json" \
+        -d "{\"questionId\":\"$qid\",\"answer\":\"A\",\"timeSpentSeconds\": 45}" > /dev/null
+    done
+  else
+    warn "No questions found in AI Test to submit answers for!"
+  fi
+  
+  # ── 5. Complete AI Test Attempt ─────────────────────────────
+  step "5. Learner POST /attempts/:id/submit-test (Triggers async /ai/analyze)"
+  endpoint "POST" "/attempts/:id/submit-test"
+  track "Complete AI Attempt" "POST" "/attempts/:id/submit-test"
+  RES=$(do_req -X POST "$BASE/attempts/$ATT_ID/submit-test" -H "Authorization: Bearer $LEARNER_TOKEN")
+  BODY=$(parse_body "$RES"); STATUS=$(parse_status "$RES") || true
+  assert_http "Complete AI Attempt" 200 "$STATUS" "$BODY"
+
+  # Give the fire-and-forget background promise time to resolve and insert InsightLog
+  info "Waiting 15 seconds for background JEE AI analysis to complete..."
+  sleep 15
+
+  # ── 6. Verify AI Insights Were Generated ────────────────────
+  step "6. Learner GET /analytics/insights/:examId (Verify AI saved)"
+  endpoint "GET" "/analytics/insights/:examId"
+  track "Verify AI Insight Logs" "GET" "/analytics/insights/:examId"
+  RES=$(do_req -X GET "$BASE/analytics/insights/$EXAM_ID" -H "Authorization: Bearer $LEARNER_TOKEN")
+  BODY=$(parse_body "$RES"); STATUS=$(parse_status "$RES") || true
+  assert_http "Fetch AI Insights" 200 "$STATUS" "$BODY"
+  assert_contains "  Should return array" "\[" "$BODY"
+  assert_contains "  Should contain insight Payload" "insightPayload" "$BODY"
+}
+
+# ── Layer 5.5: AI Integrations ──────────────────────────────────────────────
+run_ai() {
+  begin_section "🧠" "AI Generation & Analysis"
+  _run_ai_integration
   section_end
 }
 
@@ -4403,6 +4695,7 @@ declare -a SECTION_KEYS=(
   "run_subscriptions"
   "run_questions"
   "run_tests"
+  "run_ai"
   "run_analytics"
   "run_integrity"
 )
@@ -4412,6 +4705,7 @@ declare -a SECTION_LABELS=(
   "💳  Subscriptions & Access Control"
   "❓  Question Registry & Validation"
   "📝  Tests, Attempts & Lifecycle"
+  "🧠  AI Generation & Analysis (External)"
   "📊  Analytics & Results"
   "⚛️   Data Integrity & Constraints"
 )

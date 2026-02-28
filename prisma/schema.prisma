@@ -276,6 +276,8 @@ model ExamBlueprintSection {
   subject                String
   sequence               Int
   sectionDurationSeconds Int?
+  questionCount          Int     @default(30)
+  marksPerQuestion       Decimal @default(4)
 
   @@index([blueprintId])
 }
@@ -404,6 +406,7 @@ model TestQuestion {
   marks            Decimal
   negativeMarkValue Decimal? // per-question negative marking override (nullable)
   tolerance        Decimal?
+  timeSeconds      Int?     // snapshotted per-question time limit
 
   sequence Int
 

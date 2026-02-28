@@ -1,8 +1,8 @@
 import {
-    CanActivate,
-    ExecutionContext,
-    ForbiddenException,
-    Injectable,
+  CanActivate,
+  ExecutionContext,
+  ForbiddenException,
+  Injectable,
 } from '@nestjs/common';
 import { Reflector } from '@nestjs/core';
 import { UserRole } from '@prisma/client';
@@ -26,47 +26,45 @@ export const SUBSCRIPTION_EXAM_KEY = 'subscriptionExamParam';
  */
 @Injectable()
 export class SubscriptionGuard implements CanActivate {
-    constructor(
-        private readonly subscriptionService: SubscriptionService,
-        private readonly reflector: Reflector,
-    ) {}
+  constructor(
+    private readonly subscriptionService: SubscriptionService,
+    private readonly reflector: Reflector,
+  ) {}
 
-    async canActivate(context: ExecutionContext): Promise<boolean> {
-        const request = context.switchToHttp().getRequest();
-        const user = request.user;
+  async canActivate(context: ExecutionContext): Promise<boolean> {
+    const request = context.switchToHttp().getRequest();
+    const user = request.user;
 
-        if (!user) {
-            throw new ForbiddenException('Authentication required');
-        }
-
-        // Admins bypass subscription check
-        if (user.role === UserRole.ADMIN) {
-            return true;
-        }
-
-        // Resolve examId from params, body, or query
-        const examId =
-            request.params?.examId ??
-            request.body?.examId ??
-            request.query?.examId;
-
-        if (!examId) {
-            throw new ForbiddenException(
-                'Could not determine exam context for subscription check',
-            );
-        }
-
-        const hasAccess = await this.subscriptionService.hasActiveAccess(
-            user.userId,
-            examId,
-        );
-
-        if (!hasAccess) {
-            throw new ForbiddenException(
-                `No active subscription found for exam ${examId}`,
-            );
-        }
-
-        return true;
+    if (!user) {
+      throw new ForbiddenException('Authentication required');
     }
+
+    // Admins bypass subscription check
+    if (user.role === UserRole.ADMIN) {
+      return true;
+    }
+
+    // Resolve examId from params, body, or query
+    const examId =
+      request.params?.examId ?? request.body?.examId ?? request.query?.examId;
+
+    if (!examId) {
+      throw new ForbiddenException(
+        'Could not determine exam context for subscription check',
+      );
+    }
+
+    const hasAccess = await this.subscriptionService.hasActiveAccess(
+      user.userId,
+      examId,
+    );
+
+    if (!hasAccess) {
+      throw new ForbiddenException(
+        `No active subscription found for exam ${examId}`,
+      );
+    }
+
+    return true;
+  }
 }

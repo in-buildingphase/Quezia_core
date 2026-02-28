@@ -5,8 +5,8 @@ import { IsArray, IsString, ArrayNotEmpty } from 'class-validator';
  * orderedIds: full array of TestQuestion.id values in the desired sequence.
  */
 export class ReorderQuestionsDto {
-    @IsArray()
-    @ArrayNotEmpty()
-    @IsString({ each: true })
-    orderedIds: string[];
+  @IsArray()
+  @ArrayNotEmpty()
+  @IsString({ each: true })
+  orderedIds: string[];
 }

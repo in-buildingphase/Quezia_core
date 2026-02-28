@@ -11,7 +11,7 @@ import { PrismaService } from '../../prisma/prisma.service';
 
 /**
  * AUDIT LOGGING INTERCEPTOR
- * 
+ *
  * Logs all admin actions for compliance and security.
  * Applied to admin routes to track:
  * - User moderation actions
@@ -131,7 +131,7 @@ export class AuditLogInterceptor implements NestInterceptor {
     // Map admin actions to event types
     if (url.includes('/suspend')) return 'ACCOUNT_SUSPENDED';
     if (url.includes('/activate')) return 'ACCOUNT_ACTIVATED';
-    
+
     // For other admin actions, use a generic type
     // Note: You may want to extend the AuthEventType enum to include admin-specific events
     return 'LOGIN'; // Fallback (ideally create new enum values)

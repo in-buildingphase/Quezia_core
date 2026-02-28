@@ -9,23 +9,23 @@ import { PeerBenchmarkService } from './services/peer-benchmark.service';
 import { AnalyticsController } from './controllers/analytics.controller';
 
 @Module({
-    imports: [PrismaModule],
-    controllers: [AnalyticsController],
-    providers: [
-        GradingService,
-        AnalyticsService,
-        TimeEfficiencyService,
-        RiskRatioService,
-        TopicHealthService,
-        PeerBenchmarkService,
-    ],
-    exports: [
-        GradingService,
-        AnalyticsService,
-        TimeEfficiencyService,
-        RiskRatioService,
-        TopicHealthService,
-        PeerBenchmarkService,
-    ],
+  imports: [PrismaModule],
+  controllers: [AnalyticsController],
+  providers: [
+    GradingService,
+    AnalyticsService,
+    TimeEfficiencyService,
+    RiskRatioService,
+    TopicHealthService,
+    PeerBenchmarkService,
+  ],
+  exports: [
+    GradingService,
+    AnalyticsService,
+    TimeEfficiencyService,
+    RiskRatioService,
+    TopicHealthService,
+    PeerBenchmarkService,
+  ],
 })
-export class ResultModule { }
+export class ResultModule {}

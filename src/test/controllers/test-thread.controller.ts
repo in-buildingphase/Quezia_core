@@ -8,29 +8,29 @@ import { UserRole } from '@prisma/client';
 @Controller('test-threads')
 @UseGuards(JwtAuthGuard)
 export class TestThreadController {
-    constructor(private readonly testService: TestService) { }
+  constructor(private readonly testService: TestService) {}
 
-    @Post()
-    async createThread(
-        @Body() dto: CreateThreadDto,
-        @CurrentUser() user: { userId: string; role: UserRole },
-    ) {
-        return this.testService.createThread(dto, user.userId, user.role);
-    }
+  @Post()
+  async createThread(
+    @Body() dto: CreateThreadDto,
+    @CurrentUser() user: { userId: string; role: UserRole },
+  ) {
+    return this.testService.createThread(dto, user.userId, user.role);
+  }
 
-    @Get(':id')
-    async getThread(
-        @Param('id') id: string,
-        @CurrentUser() user: { userId: string; role: UserRole },
-    ) {
-        return this.testService.getThreadById(id, user.userId, user.role);
-    }
+  @Get(':id')
+  async getThread(
+    @Param('id') id: string,
+    @CurrentUser() user: { userId: string; role: UserRole },
+  ) {
+    return this.testService.getThreadById(id, user.userId, user.role);
+  }
 
-    @Get(':id/latest')
-    async getLatestVersion(
-        @Param('id') id: string,
-        @CurrentUser() user: { userId: string; role: UserRole },
-    ) {
-        return this.testService.getLatestVersion(id, user.userId, user.role);
-    }
+  @Get(':id/latest')
+  async getLatestVersion(
+    @Param('id') id: string,
+    @CurrentUser() user: { userId: string; role: UserRole },
+  ) {
+    return this.testService.getLatestVersion(id, user.userId, user.role);
+  }
 }

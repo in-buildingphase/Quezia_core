@@ -4,7 +4,7 @@ import { PrismaService } from '../../prisma/prisma.service';
 
 /**
  * PEER BENCHMARKING SERVICE
- * 
+ *
  * Responsibilities:
  * - Maintain exam-level score distribution
  * - Maintain subject-level averages
@@ -12,8 +12,8 @@ import { PrismaService } from '../../prisma/prisma.service';
  * - Assign percentile on attempt completion
  * - Compute rank within cohort
  * - Separate cohorts by: exam, blueprint version, test format class
- * 
- * CRITICAL: 
+ *
+ * CRITICAL:
  * - Percentiles are NOT computed dynamically per request
  * - Only applies to SYSTEM-originated tests (not user-generated custom tests)
  * - User-generated tests don't have meaningful peer comparisons
@@ -27,7 +27,7 @@ export class PeerBenchmarkService {
   /**
    * Update peer benchmark for a completed attempt.
    * Called within the transaction during attempt completion.
-   * 
+   *
    * Returns: Computed percentile and rank
    */
   async updatePeerBenchmark(
@@ -47,14 +47,15 @@ export class PeerBenchmarkService {
 
     // Use row-level locking for concurrency safety
     // Split query to avoid Postgres type inference failure on null parameters
-    const benchmarks = blueprintVersion !== null
-      ? await tx.$queryRaw<any[]>`
+    const benchmarks =
+      blueprintVersion !== null
+        ? await tx.$queryRaw<any[]>`
           SELECT * FROM "PeerBenchmark"
           WHERE "examId" = ${examId}
           AND "blueprintVersion" = ${blueprintVersion}
           FOR UPDATE
         `
-      : await tx.$queryRaw<any[]>`
+        : await tx.$queryRaw<any[]>`
           SELECT * FROM "PeerBenchmark"
           WHERE "examId" = ${examId}
           AND "blueprintVersion" IS NULL
@@ -149,7 +150,7 @@ export class PeerBenchmarkService {
     // Update subject averages incrementally
     const subjectAverages = await this.updateSubjectAverages(
       tx,
-      benchmark.subjectAverages as any,
+      benchmark.subjectAverages,
       attempt,
       benchmark.totalParticipants,
     );
@@ -247,7 +248,12 @@ export class PeerBenchmarkService {
 
     const subjectStats: Record<
       string,
-      { totalMarks: number; earnedMarks: number; total: number; correct: number }
+      {
+        totalMarks: number;
+        earnedMarks: number;
+        total: number;
+        correct: number;
+      }
     > = {};
 
     for (const q of questions) {
@@ -269,10 +275,8 @@ export class PeerBenchmarkService {
       }
     }
 
-    const result: Record<
-      string,
-      { avgScore: number; avgAccuracy: number }
-    > = {};
+    const result: Record<string, { avgScore: number; avgAccuracy: number }> =
+      {};
 
     for (const [subject, stats] of Object.entries(subjectStats)) {
       result[subject] = {
@@ -292,10 +296,7 @@ export class PeerBenchmarkService {
    */
   private async updateSubjectAverages(
     tx: Prisma.TransactionClient,
-    currentAverages: Record<
-      string,
-      { avgScore: number; avgAccuracy: number }
-    >,
+    currentAverages: Record<string, { avgScore: number; avgAccuracy: number }>,
     attempt: any,
     currentParticipants: number,
   ): Promise<Record<string, { avgScore: number; avgAccuracy: number }>> {

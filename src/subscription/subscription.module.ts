@@ -5,9 +5,9 @@ import { SubscriptionController } from './subscription.controller';
 import { SubscriptionGuard } from './guards/subscription.guard';
 
 @Module({
-    imports: [PrismaModule],
-    controllers: [SubscriptionController],
-    providers: [SubscriptionService, SubscriptionGuard],
-    exports: [SubscriptionService, SubscriptionGuard],
+  imports: [PrismaModule],
+  controllers: [SubscriptionController],
+  providers: [SubscriptionService, SubscriptionGuard],
+  exports: [SubscriptionService, SubscriptionGuard],
 })
 export class SubscriptionModule {}

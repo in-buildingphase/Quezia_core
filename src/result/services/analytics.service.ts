@@ -63,16 +63,19 @@ export class AnalyticsService {
     // 1. Update Peer Benchmarking (ONLY for SYSTEM tests, not user-generated)
     let percentile = new Prisma.Decimal(0);
     let userRank: number | null = null;
-    
+
     if (isSystemTest) {
-      const benchmarkResult = await this.peerBenchmarkService.updatePeerBenchmark(
-        tx,
-        examId,
-        attempt,
-      );
+      const benchmarkResult =
+        await this.peerBenchmarkService.updatePeerBenchmark(
+          tx,
+          examId,
+          attempt,
+        );
       percentile = benchmarkResult.percentile;
       userRank = benchmarkResult.userRank;
-      this.logger.log(`Peer benchmark updated: Percentile=${percentile}, Rank=${userRank}`);
+      this.logger.log(
+        `Peer benchmark updated: Percentile=${percentile}, Rank=${userRank}`,
+      );
     } else {
       this.logger.log('Skipping peer benchmark for user-generated test');
     }
@@ -179,7 +182,9 @@ export class AnalyticsService {
           weakestSubject,
           riskRatio,
           riskClassification,
-          inefficiencyIndex: new Prisma.Decimal(timeEfficiency.inefficiencyIndex),
+          inefficiencyIndex: new Prisma.Decimal(
+            timeEfficiency.inefficiencyIndex,
+          ),
         },
       });
     } else {
@@ -299,12 +304,14 @@ export class AnalyticsService {
       where: { userId_examId_subject: { userId, examId, subject } },
     });
 
-    const currentAccuracy = currentStats.attempted > 0 
-      ? (currentStats.correct / currentStats.attempted) * 100 
-      : 0;
-    const currentAvgTime = currentStats.attempted > 0 && currentStats.time 
-      ? currentStats.time / currentStats.attempted 
-      : 0;
+    const currentAccuracy =
+      currentStats.attempted > 0
+        ? (currentStats.correct / currentStats.attempted) * 100
+        : 0;
+    const currentAvgTime =
+      currentStats.attempted > 0 && currentStats.time
+        ? currentStats.time / currentStats.attempted
+        : 0;
 
     if (!analytics) {
       await tx.userSubjectAnalytics.create({
@@ -312,9 +319,13 @@ export class AnalyticsService {
           userId,
           examId,
           subject,
-          accuracy: new Prisma.Decimal(isNaN(currentAccuracy) ? 0 : currentAccuracy),
+          accuracy: new Prisma.Decimal(
+            isNaN(currentAccuracy) ? 0 : currentAccuracy,
+          ),
           attempts: 1,
-          averageTime: new Prisma.Decimal(isNaN(currentAvgTime) ? 0 : currentAvgTime),
+          averageTime: new Prisma.Decimal(
+            isNaN(currentAvgTime) ? 0 : currentAvgTime,
+          ),
           trendDelta: new Prisma.Decimal(0),
           consistencyScore: new Prisma.Decimal(0),
           lastTestedAt: timestamp,
@@ -387,16 +398,13 @@ export class AnalyticsService {
     });
 
     // Compute current performance metrics
-    const currentAccuracy = stats.attempted > 0 
-      ? (stats.correct / stats.attempted) * 100 
-      : 0;
+    const currentAccuracy =
+      stats.attempted > 0 ? (stats.correct / stats.attempted) * 100 : 0;
     const incorrectCount = stats.attempted - stats.correct;
-    const currentNegativeRate = stats.attempted > 0 
-      ? (incorrectCount / stats.attempted) * 100 
-      : 0;
-    const currentAvgTime = stats.attempted > 0 && stats.time 
-      ? stats.time / stats.attempted 
-      : 0;
+    const currentNegativeRate =
+      stats.attempted > 0 ? (incorrectCount / stats.attempted) * 100 : 0;
+    const currentAvgTime =
+      stats.attempted > 0 && stats.time ? stats.time / stats.attempted : 0;
 
     // Prepare difficulty split data
     const easyTotal = stats.easyTotal || 0;
@@ -407,12 +415,27 @@ export class AnalyticsService {
     const hardCorrect = stats.hardCorrect || 0;
 
     let updatedAttempts = 1;
-    let updatedAccuracy = new Prisma.Decimal(isNaN(currentAccuracy) ? 0 : currentAccuracy);
-    let updatedAvgTime = new Prisma.Decimal(isNaN(currentAvgTime) ? 0 : currentAvgTime);
-    let updatedNegativeRate = new Prisma.Decimal(isNaN(currentNegativeRate) ? 0 : currentNegativeRate);
-    let updatedEasyAcc = easyTotal > 0 ? new Prisma.Decimal((easyCorrect / easyTotal) * 100) : new Prisma.Decimal(0);
-    let updatedMedAcc = mediumTotal > 0 ? new Prisma.Decimal((mediumCorrect / mediumTotal) * 100) : new Prisma.Decimal(0);
-    let updatedHardAcc = hardTotal > 0 ? new Prisma.Decimal((hardCorrect / hardTotal) * 100) : new Prisma.Decimal(0);
+    let updatedAccuracy = new Prisma.Decimal(
+      isNaN(currentAccuracy) ? 0 : currentAccuracy,
+    );
+    let updatedAvgTime = new Prisma.Decimal(
+      isNaN(currentAvgTime) ? 0 : currentAvgTime,
+    );
+    let updatedNegativeRate = new Prisma.Decimal(
+      isNaN(currentNegativeRate) ? 0 : currentNegativeRate,
+    );
+    let updatedEasyAcc =
+      easyTotal > 0
+        ? new Prisma.Decimal((easyCorrect / easyTotal) * 100)
+        : new Prisma.Decimal(0);
+    let updatedMedAcc =
+      mediumTotal > 0
+        ? new Prisma.Decimal((mediumCorrect / mediumTotal) * 100)
+        : new Prisma.Decimal(0);
+    let updatedHardAcc =
+      hardTotal > 0
+        ? new Prisma.Decimal((hardCorrect / hardTotal) * 100)
+        : new Prisma.Decimal(0);
 
     if (analytics) {
       updatedAttempts = analytics.attempts + 1;

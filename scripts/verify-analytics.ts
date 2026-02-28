@@ -34,7 +34,7 @@ async function bootstrap() {
         // 3. Submit Answers
         console.log('--- Submitting Answers ---');
         for (const tq of test.questions) {
-            await lifecycleService.submitAnswer(attempt.id, tq.questionId, tq.correctAnswer, user.id);
+            await lifecycleService.submitAnswer(attempt.id, { questionId: tq.questionId, answer: tq.correctAnswer }, user.id);
         }
         console.log('Submitted all correct answers.');
 

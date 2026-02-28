@@ -9,18 +9,18 @@ import { JwtStrategy } from './strategies/jwt.strategy';
 import { RefreshTokenStrategy } from './strategies/refresh.strategy';
 
 @Module({
-	imports: [
-		PrismaModule,
-		PassportModule,
-		JwtModule.register({
-			secret: authConstants.accessTokenSecret,
-			signOptions: {
-				expiresIn: authConstants.accessTokenTtl as JwtSignOptions['expiresIn'],
-			},
-		}),
-	],
-	controllers: [AuthController],
-	providers: [AuthService, JwtStrategy, RefreshTokenStrategy],
-	exports: [AuthService],
+  imports: [
+    PrismaModule,
+    PassportModule,
+    JwtModule.register({
+      secret: authConstants.accessTokenSecret,
+      signOptions: {
+        expiresIn: authConstants.accessTokenTtl as JwtSignOptions['expiresIn'],
+      },
+    }),
+  ],
+  controllers: [AuthController],
+  providers: [AuthService, JwtStrategy, RefreshTokenStrategy],
+  exports: [AuthService],
 })
 export class AuthModule {}

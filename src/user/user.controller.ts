@@ -10,40 +10,40 @@ import { UserService } from './user.service';
 @UseGuards(JwtAuthGuard)
 @Controller('users')
 export class UserController {
-	constructor(private readonly userService: UserService) {}
+  constructor(private readonly userService: UserService) {}
 
-	@Get('me')
-	getMe(@CurrentUser() user: { userId: string }) {
-		return this.userService.getMe(user.userId);
-	}
+  @Get('me')
+  getMe(@CurrentUser() user: { userId: string }) {
+    return this.userService.getMe(user.userId);
+  }
 
-	@Patch('me/context')
-	updateContext(
-		@CurrentUser() user: { userId: string },
-		@Body() payload: UpdateContextDto,
-	) {
-		return this.userService.updateContext(user.userId, payload);
-	}
+  @Patch('me/context')
+  updateContext(
+    @CurrentUser() user: { userId: string },
+    @Body() payload: UpdateContextDto,
+  ) {
+    return this.userService.updateContext(user.userId, payload);
+  }
 
-	@Patch('me/profile')
-	updateProfile(
-		@CurrentUser() user: { userId: string },
-		@Body() payload: UpdateProfileDto,
-	) {
-		return this.userService.updateProfile(user.userId, payload);
-	}
+  @Patch('me/profile')
+  updateProfile(
+    @CurrentUser() user: { userId: string },
+    @Body() payload: UpdateProfileDto,
+  ) {
+    return this.userService.updateProfile(user.userId, payload);
+  }
 
-	@UseGuards(RolesGuard)
-	@Roles('admin')
-	@Patch(':id/suspend')
-	suspendUser(@Param('id') id: string) {
-		return this.userService.suspendUser(id);
-	}
+  @UseGuards(RolesGuard)
+  @Roles('admin')
+  @Patch(':id/suspend')
+  suspendUser(@Param('id') id: string) {
+    return this.userService.suspendUser(id);
+  }
 
-	@UseGuards(RolesGuard)
-	@Roles('admin')
-	@Patch(':id/activate')
-	activateUser(@Param('id') id: string) {
-		return this.userService.activateUser(id);
-	}
+  @UseGuards(RolesGuard)
+  @Roles('admin')
+  @Patch(':id/activate')
+  activateUser(@Param('id') id: string) {
+    return this.userService.activateUser(id);
+  }
 }

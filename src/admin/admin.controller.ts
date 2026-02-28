@@ -22,7 +22,7 @@ import { AuditLogInterceptor } from '../common/interceptors/audit-log.intercepto
 
 /**
  * ADMIN CONTROLLER
- * 
+ *
  * All endpoints require ADMIN role.
  * Provides:
  * - System-wide analytics
@@ -30,7 +30,7 @@ import { AuditLogInterceptor } from '../common/interceptors/audit-log.intercepto
  * - Audit log viewing
  * - Test management
  * - Advanced administrative operations
- * 
+ *
  * All actions are logged via AuditLogInterceptor
  */
 @Controller('admin')
@@ -71,7 +71,8 @@ export class AdminController {
       page,
       limit,
       role: role as any,
-      isActive: isActive === 'true' ? true : isActive === 'false' ? false : undefined,
+      isActive:
+        isActive === 'true' ? true : isActive === 'false' ? false : undefined,
       search,
     });
   }

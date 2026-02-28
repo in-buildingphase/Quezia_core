@@ -1,4 +1,5 @@
 import { Module } from '@nestjs/common';
+import { HttpModule } from '@nestjs/axios';
 import { PrismaModule } from '../prisma/prisma.module';
 import { ExamModule } from '../exam/exam.module';
 import { AuthModule } from '../auth/auth.module';
@@ -10,20 +11,39 @@ import { TestService } from './services/test.service';
 import { TestGenerationService } from './services/test-generation.service';
 import { TestLifecycleService } from './services/test-lifecycle.service';
 import { TestQuestionInjectionService } from './services/test-question-injection.service';
+import { QuestionFetcherService } from './services/question-fetcher.service';
 import { QuestionModule } from '../question/question.module';
 import { ResultModule } from '../result/result.module';
 import { SubscriptionModule } from '../subscription/subscription.module';
 
 @Module({
-    imports: [PrismaModule, ExamModule, AuthModule, QuestionModule, ResultModule, SubscriptionModule],
-    controllers: [TestThreadController, TestGenerationController, TestController, AttemptController],
-    providers: [
-        TestService,
-        TestGenerationService,
-        TestLifecycleService,
-        TestQuestionInjectionService,
-    ],
-    exports: [TestService, TestGenerationService, TestLifecycleService, TestQuestionInjectionService],
+  imports: [
+    PrismaModule,
+    ExamModule,
+    AuthModule,
+    QuestionModule,
+    ResultModule,
+    SubscriptionModule,
+    HttpModule,
+  ],
+  controllers: [
+    TestThreadController,
+    TestGenerationController,
+    TestController,
+    AttemptController,
+  ],
+  providers: [
+    TestService,
+    TestGenerationService,
+    TestLifecycleService,
+    TestQuestionInjectionService,
+    QuestionFetcherService,
+  ],
+  exports: [
+    TestService,
+    TestGenerationService,
+    TestLifecycleService,
+    TestQuestionInjectionService,
+  ],
 })
-export class TestModule { }
-
+export class TestModule {}

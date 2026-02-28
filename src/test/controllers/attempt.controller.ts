@@ -16,7 +16,7 @@ import { SubmitAnswerDto } from '../dto/submit-answer.dto';
 @Controller('attempts')
 @UseGuards(JwtAuthGuard)
 export class AttemptController {
-  constructor(private readonly testLifecycleService: TestLifecycleService) {}
+  constructor(private readonly testLifecycleService: TestLifecycleService) { }
 
   @Get(':id')
   async getAttempt(
@@ -31,7 +31,10 @@ export class AttemptController {
     @Param('testId') testId: string,
     @CurrentUser() user: { userId: string },
   ) {
-    const attempt = await this.testLifecycleService.startAttempt(testId, user.userId);
+    const attempt = await this.testLifecycleService.startAttempt(
+      testId,
+      user.userId,
+    );
     return { id: attempt.id, status: attempt.status };
   }
 
@@ -51,8 +54,7 @@ export class AttemptController {
   ) {
     return this.testLifecycleService.submitAnswer(
       attemptId,
-      dto.questionId,
-      dto.answer,
+      dto,
       user.userId,
     );
   }

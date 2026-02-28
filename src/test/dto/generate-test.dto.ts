@@ -1,11 +1,11 @@
 import { IsBoolean, IsOptional, IsString } from 'class-validator';
 
 export class GenerateTestDto {
-    @IsBoolean()
-    @IsOptional()
-    followsBlueprint?: boolean;
+  @IsBoolean()
+  @IsOptional()
+  followsBlueprint?: boolean;
 
-    @IsString()
-    @IsOptional()
-    blueprintReferenceId?: string;
+  @IsString()
+  @IsOptional()
+  blueprintReferenceId?: string;
 }

@@ -9,6 +9,8 @@ import { AttemptStatus, Prisma, TestStatus, UserRole } from '@prisma/client';
 import { GradingService } from '../../result/services/grading.service';
 import { AnalyticsService } from '../../result/services/analytics.service';
 import { SubscriptionService } from '../../subscription/subscription.service';
+import { SubmitAnswerDto } from '../dto/submit-answer.dto';
+import { QuestionFetcherService } from './question-fetcher.service';
 
 @Injectable()
 export class TestLifecycleService {
@@ -17,7 +19,8 @@ export class TestLifecycleService {
     private readonly gradingService: GradingService,
     private readonly analyticsService: AnalyticsService,
     private readonly subscriptionService: SubscriptionService,
-  ) {}
+    private readonly questionFetcher: QuestionFetcherService,
+  ) { }
 
   async getAttemptById(attemptId: string, userId: string) {
     const attempt = await this.prisma.testAttempt.findUnique({
@@ -39,7 +42,8 @@ export class TestLifecycleService {
     });
 
     if (!attempt) throw new NotFoundException('Attempt not found');
-    if (attempt.userId !== userId) throw new ForbiddenException('Not your attempt');
+    if (attempt.userId !== userId)
+      throw new ForbiddenException('Not your attempt');
 
     return attempt;
   }
@@ -51,7 +55,8 @@ export class TestLifecycleService {
     });
 
     if (!attempt) throw new NotFoundException('Attempt not found');
-    if (attempt.userId !== userId) throw new ForbiddenException('Not your attempt');
+    if (attempt.userId !== userId)
+      throw new ForbiddenException('Not your attempt');
 
     const questions = await this.prisma.testQuestion.findMany({
       where: { testId: attempt.testId },
@@ -176,10 +181,11 @@ export class TestLifecycleService {
 
   async submitAnswer(
     attemptId: string,
-    questionId: string,
-    answer: string,
+    dto: SubmitAnswerDto,
     userId: string,
   ) {
+    const { questionId, answer, timeSpentSeconds, visitationData } = dto;
+
     const attempt = await this.prisma.testAttempt.findUnique({
       where: { id: attemptId },
       select: {
@@ -221,11 +227,15 @@ export class TestLifecycleService {
       },
       update: {
         selectedAnswer: answer,
+        ...(timeSpentSeconds !== undefined && { timeSpentSeconds }),
+        ...(visitationData !== undefined && { visitationData }),
       },
       create: {
         attemptId,
         testQuestionId: testQuestion.id,
         selectedAnswer: answer,
+        ...(timeSpentSeconds !== undefined && { timeSpentSeconds }),
+        ...(visitationData !== undefined && { visitationData }),
       },
     });
   }
@@ -249,14 +259,15 @@ export class TestLifecycleService {
     }
 
     // 1. Calculate scores via Enhanced GradingService
-    const gradingResults = await this.gradingService.calculateAttemptScore(attemptId);
+    const gradingResults =
+      await this.gradingService.calculateAttemptScore(attemptId);
 
     if (!gradingResults) {
       throw new BadRequestException('Failed to grade attempt');
     }
 
     // 2. Transactional Update with all analytics
-    return this.prisma.$transaction(
+    const result = await this.prisma.$transaction(
       async (tx) => {
         await tx.testAttempt.update({
           where: { id: attemptId },
@@ -297,5 +308,15 @@ export class TestLifecycleService {
         maxWait: 5000,
       },
     );
+
+    // Call AI Analyze asynchronously (fire-and-forget)
+    this.questionFetcher.analyzePerformance(attemptId).catch((err) => {
+      console.error(
+        `[TestLifecycleService] Failed to analyze performance for attempt ${attemptId}:`,
+        err,
+      );
+    });
+
+    return result;
   }
 }

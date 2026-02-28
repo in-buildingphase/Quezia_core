@@ -8,15 +8,14 @@ import { PrismaModule } from '../prisma/prisma.module';
 import { AuthModule } from '../auth/auth.module';
 
 @Module({
-    imports: [PrismaModule, AuthModule],
-    controllers: [QuestionController],
-    providers: [
-        QuestionService,
-        QuestionRepository,
-        QuestionSelectionService,
-        QuestionValidatorService,
-    ],
-    exports: [QuestionService, QuestionValidatorService],
+  imports: [PrismaModule, AuthModule],
+  controllers: [QuestionController],
+  providers: [
+    QuestionService,
+    QuestionRepository,
+    QuestionSelectionService,
+    QuestionValidatorService,
+  ],
+  exports: [QuestionService, QuestionValidatorService],
 })
-export class QuestionModule { }
-
+export class QuestionModule {}
