@@ -65,12 +65,18 @@ export class TestGenerationService {
             throw new ForbiddenException('You do not have access to this thread');
         }
 
+        // ── Selection Logic: prompt-driven vs blueprint-driven ─────────────────
+        // If a prompt is explicitly passed in the DTO, we default to
+        // followsBlueprint=false (AI-only generation).
+        const followsBlueprint = dto.followsBlueprint ?? (dto.prompt ? false : true);
+
         return this.createVersion(
             thread as any,
             1,
-            dto.followsBlueprint ?? true,
+            followsBlueprint,
             dto.blueprintReferenceId,
             userId,
+            dto.prompt,
         );
     }
 
@@ -129,6 +135,7 @@ export class TestGenerationService {
         followsBlueprint: boolean,
         blueprintId?: string,
         userId?: string,
+        dtoPrompt?: string,
     ) {
         let ruleSnapshot: any = {};
         let sectionSnapshot: SectionSnapshot[] = [];
@@ -229,7 +236,8 @@ export class TestGenerationService {
             if (thread.originType === 'GENERATED' && totalQuestions > 0) {
                 // Determine a valid AI subject, default to Physics instead of General
                 const subject = config.subject || 'Physics';
-                const prompt = config.prompt;
+                // DTO prompt takes precedence over thread-level base config prompt
+                const prompt = dtoPrompt || config.prompt;
 
                 const selected = await this.questionFetcher.fetchQuestions({
                     userId: userId ?? thread.examId,

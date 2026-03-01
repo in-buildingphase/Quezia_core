@@ -22,6 +22,28 @@ export class TestLifecycleService {
     private readonly questionFetcher: QuestionFetcherService,
   ) { }
 
+  async getAttempts(userId: string, threadId?: string) {
+    const where: any = { userId };
+    if (threadId) {
+      where.test = { threadId };
+    }
+
+    return this.prisma.testAttempt.findMany({
+      where,
+      orderBy: { startedAt: 'desc' },
+      include: {
+        test: {
+          select: {
+            id: true,
+            versionNumber: true,
+            totalQuestions: true,
+            totalMarks: true,
+          },
+        },
+      },
+    });
+  }
+
   async getAttemptById(attemptId: string, userId: string) {
     const attempt = await this.prisma.testAttempt.findUnique({
       where: { id: attemptId },
@@ -318,5 +340,127 @@ export class TestLifecycleService {
     });
 
     return result;
+  }
+
+  async getAttemptReview(attemptId: string, userId: string) {
+    const attempt = await this.prisma.testAttempt.findUnique({
+      where: { id: attemptId },
+      select: {
+        id: true,
+        testId: true,
+        userId: true,
+        status: true,
+        startedAt: true,
+        completedAt: true,
+        totalScore: true,
+        accuracy: true,
+        percentile: true,
+        userRank: true,
+        timeSpentSeconds: true,
+        riskRatio: true,
+        test: {
+          select: {
+            totalQuestions: true,
+            totalMarks: true,
+            threadId: true,
+          },
+        },
+      },
+    });
+
+    if (!attempt) throw new NotFoundException('Attempt not found');
+    if (attempt.userId !== userId)
+      throw new ForbiddenException('Not your attempt');
+    if (attempt.status !== AttemptStatus.COMPLETED) {
+      throw new BadRequestException(
+        'Attempt review is only available for completed attempts',
+      );
+    }
+
+    // Fetch all TestQuestion entries for this test, with their attempt answers
+    const testQuestions = await this.prisma.testQuestion.findMany({
+      where: { testId: attempt.testId },
+      orderBy: { sequence: 'asc' },
+      select: {
+        id: true,
+        questionId: true,
+        sequence: true,
+        subject: true,
+        topic: true,
+        difficulty: true,
+        questionType: true,
+        contentSnapshot: true,
+        correctAnswer: true,
+        explanation: true,
+        marks: true,
+        negativeMarkValue: true,
+        attemptQuestions: {
+          where: { attemptId },
+          select: {
+            id: true,
+            selectedAnswer: true,
+            isCorrect: true,
+            marksAwarded: true,
+            timeSpentSeconds: true,
+          },
+        },
+      },
+    });
+
+    let correct = 0;
+    let incorrect = 0;
+    let unattempted = 0;
+
+    const questions = testQuestions.map((tq) => {
+      const aq = tq.attemptQuestions[0] ?? null;
+
+      let status: 'CORRECT' | 'INCORRECT' | 'UNATTEMPTED';
+      if (!aq || aq.selectedAnswer == null || aq.selectedAnswer.trim() === '') {
+        status = 'UNATTEMPTED';
+        unattempted++;
+      } else if (aq.isCorrect) {
+        status = 'CORRECT';
+        correct++;
+      } else {
+        status = 'INCORRECT';
+        incorrect++;
+      }
+
+      return {
+        id: aq?.id ?? null,
+        questionId: tq.questionId,
+        sequence: tq.sequence,
+        subject: tq.subject,
+        topic: tq.topic,
+        difficulty: tq.difficulty,
+        questionType: tq.questionType,
+        contentPayload: tq.contentSnapshot,
+        marks: tq.marks,
+        negativeMarkValue: tq.negativeMarkValue,
+        selectedAnswer: aq?.selectedAnswer ?? null,
+        correctAnswer: tq.correctAnswer,
+        isCorrect: aq?.isCorrect ?? null,
+        marksAwarded: aq?.marksAwarded ?? null,
+        explanation: tq.explanation,
+        timeSpentSeconds: aq?.timeSpentSeconds ?? null,
+        status,
+      };
+    });
+
+    const { test, userId: _uid, ...attemptData } = attempt;
+
+    return {
+      attempt: attemptData,
+      summary: {
+        totalQuestions: test.totalQuestions,
+        attempted: correct + incorrect,
+        correct,
+        incorrect,
+        unattempted,
+        totalScore: attempt.totalScore,
+        maxScore: test.totalMarks,
+      },
+      questions,
+    };
   }
 }

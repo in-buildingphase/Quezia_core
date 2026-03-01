@@ -104,7 +104,7 @@ export class QuestionFetcherService {
           subtopic: '', // AI service does not return subtopic
           difficulty: (q.difficulty as string).toUpperCase() as Difficulty,
           questionType:
-            (q.questionType as string)?.toLowerCase() === 'numerical'
+            ['numerical', 'numeric'].includes(q.questionType?.toLowerCase())
               ? QuestionType.NUMERIC
               : QuestionType.MCQ,
           contentPayload: q.contentPayload,

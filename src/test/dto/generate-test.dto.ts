@@ -8,4 +8,8 @@ export class GenerateTestDto {
   @IsString()
   @IsOptional()
   blueprintReferenceId?: string;
+
+  @IsString()
+  @IsOptional()
+  prompt?: string;
 }

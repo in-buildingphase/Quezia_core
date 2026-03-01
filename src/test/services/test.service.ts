@@ -10,7 +10,7 @@ import { TestStatus, UserRole } from '@prisma/client';
 
 @Injectable()
 export class TestService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(private readonly prisma: PrismaService) { }
 
   // ─────────────────────────────────────────────────────────────────────────
   // THREAD: create
@@ -38,6 +38,24 @@ export class TestService {
         // Null for SYSTEM origin to express "no human creator"
         createdByUserId: dto.originType === 'SYSTEM' ? null : userId,
       },
+    });
+  }
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // THREAD: list by user
+  // ─────────────────────────────────────────────────────────────────────────
+  async getThreadsByUser(userId: string, role: UserRole) {
+    if (role === UserRole.ADMIN) {
+      return this.prisma.testThread.findMany({
+        orderBy: { createdAt: 'desc' },
+      });
+    }
+
+    return this.prisma.testThread.findMany({
+      where: {
+        createdByUserId: userId,
+      },
+      orderBy: { createdAt: 'desc' },
     });
   }
 
@@ -152,8 +170,8 @@ export class TestService {
     if (actualCount !== test.totalQuestions) {
       throw new BadRequestException(
         `Question count mismatch: declared totalQuestions=${test.totalQuestions} ` +
-          `but actual snapshotted questions=${actualCount}. ` +
-          'Inject the missing questions before publishing.',
+        `but actual snapshotted questions=${actualCount}. ` +
+        'Inject the missing questions before publishing.',
       );
     }
 
@@ -167,8 +185,8 @@ export class TestService {
     if (Math.abs(marksSum - declaredMarks) > 0.001) {
       throw new BadRequestException(
         `Marks sum mismatch: declared totalMarks=${declaredMarks} ` +
-          `but sum of question marks=${marksSum.toFixed(4)}. ` +
-          'Fix question marks before publishing.',
+        `but sum of question marks=${marksSum.toFixed(4)}. ` +
+        'Fix question marks before publishing.',
       );
     }
 
@@ -183,8 +201,8 @@ export class TestService {
       if (actual !== declared) {
         throw new BadRequestException(
           `Section "${sectionId}" (subject: ${section.subject}) has ${actual} question(s) ` +
-            `but sectionSnapshot declares ${declared}. ` +
-            'Inject the correct number of questions per section.',
+          `but sectionSnapshot declares ${declared}. ` +
+          'Inject the correct number of questions per section.',
         );
       }
     }
@@ -241,6 +259,64 @@ export class TestService {
     }
     await this.prisma.test.delete({ where: { id: testId } });
     return { message: 'Test deleted successfully' };
+  }
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // THREAD: delete (with cascading cleanup)
+  // Learners can only delete their own GENERATED threads.
+  // Admins can delete any thread.
+  // Deleting a thread deletes all tests, attempts and their related questions/analytics.
+  // ─────────────────────────────────────────────────────────────────────────
+  async deleteThread(
+    threadId: string,
+    userId: string,
+    role: UserRole,
+  ): Promise<{ message: string }> {
+    const thread = await this.prisma.testThread.findUnique({
+      where: { id: threadId },
+      include: { tests: { select: { id: true } } },
+    });
+
+    if (!thread) {
+      throw new NotFoundException(`Thread "${threadId}" not found`);
+    }
+
+    // Ownership and Role gating
+    if (role !== UserRole.ADMIN) {
+      if (!thread.createdByUserId || thread.createdByUserId !== userId) {
+        throw new ForbiddenException('You do not have access to delete this thread');
+      }
+      // System threads (createdByUserId: null) are not deletable by learners
+      if (thread.createdByUserId === null) {
+        throw new ForbiddenException('Cannot delete system threads');
+      }
+    }
+
+    const testIds = thread.tests.map((t) => t.id);
+
+    // Transactional deletion of all associations
+    await this.prisma.$transaction(async (tx) => {
+      // 1. Delete PerformanceTrend records referencing these attempts
+      await tx.performanceTrend.deleteMany({
+        where: {
+          attemptId: {
+            in: (
+              await tx.testAttempt.findMany({
+                where: { testId: { in: testIds } },
+                select: { id: true },
+              })
+            ).map((a) => a.id),
+          },
+        },
+      });
+
+      // 2. Delete the thread (cascades: Test → TestQuestion, TestAttempt → TestAttemptQuestion)
+      await tx.testThread.delete({
+        where: { id: threadId },
+      });
+    });
+
+    return { message: 'Test thread and all associated data deleted successfully' };
   }
 
   // ─────────────────────────────────────────────────────────────────────────
