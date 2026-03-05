@@ -67,7 +67,7 @@ export class QuestionFetcherService {
       user_id: params.userId,
       subject: params.subject.toLowerCase(),
       difficulty: params.difficulty.toLowerCase(), // MIXED→mixed, EASY→easy, etc.
-      count: requestedCount,
+      questionCount: requestedCount,
     };
     if (params.prompt) body.prompt = params.prompt;
 

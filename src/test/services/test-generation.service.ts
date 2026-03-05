@@ -233,17 +233,19 @@ export class TestGenerationService {
             durationSeconds = config.durationSeconds || 3600;
             totalQuestions = config.questionCount || 0;
 
-            if (thread.originType === 'GENERATED' && totalQuestions > 0) {
+            if ((thread.originType === 'GENERATED' && totalQuestions > 0) || dtoPrompt) {
                 // Determine a valid AI subject, default to Physics instead of General
                 const subject = config.subject || 'Physics';
                 // DTO prompt takes precedence over thread-level base config prompt
                 const prompt = dtoPrompt || config.prompt;
+                // When prompt-only generation, default to 30 questions if config has no count
+                const fetchCount = totalQuestions > 0 ? totalQuestions : 30;
 
                 const selected = await this.questionFetcher.fetchQuestions({
                     userId: userId ?? thread.examId,
                     subject,
                     difficulty: requestedDifficulty,
-                    count: totalQuestions,
+                    count: fetchCount,
                     prompt,
                     excludeQuestionIds: [],
                 });
