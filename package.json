@@ -7,7 +7,7 @@
   "type": "commonjs",
   "license": "UNLICENSED",
   "scripts": {
-    "build": "nest build",
+    "build": "prisma generate && nest build",
     "format": "prettier --write \"src/**/*.ts\" \"test/**/*.ts\"",
     "start": "nest start",
     "start:dev": "nest start --watch",
@@ -24,7 +24,8 @@
     "prisma:migrate": "prisma migrate dev",
     "prisma:pull": "prisma db pull",
     "prisma:deploy": "prisma migrate deploy",
-    "db:reset": "prisma migrate reset --force"
+    "db:reset": "prisma migrate reset --force",
+    "postinstall": "prisma generate"
   },
   "prisma": {
     "seed": "ts-node prisma/seed.ts"

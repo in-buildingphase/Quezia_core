@@ -61,15 +61,31 @@ export class QuestionFetcherService {
       200,
     );
 
-    // Build request body — AI requires at least one of: prompt, subject, subjects.
-    // We always send subjects so the requirement is always satisfied.
-    const body: Record<string, unknown> = {
-      user_id: params.userId,
-      subject: params.subject.toLowerCase(),
-      difficulty: params.difficulty.toLowerCase(), // MIXED→mixed, EASY→easy, etc.
-      questionCount: requestedCount,
-    };
-    if (params.prompt) body.prompt = params.prompt;
+    // Build request body according to the calling mode:
+    //
+    // Option A — natural language (prompt provided):
+    //   Send ONLY user_id + prompt. The AI service parses the prompt and
+    //   decides subjects, difficulty, question count, and format entirely.
+    //   Do NOT send questionCount / subject / difficulty alongside the prompt
+    //   or those structured fields will override the prompt's intent.
+    //
+    // Option B — structured (no prompt):
+    //   Send explicit subject / difficulty / questionCount so the AI returns
+    //   exactly what the caller requested.
+    let body: Record<string, unknown>;
+    if (params.prompt) {
+      body = {
+        user_id: params.userId,
+        prompt: params.prompt,
+      };
+    } else {
+      body = {
+        user_id: params.userId,
+        subject: params.subject.toLowerCase(),
+        difficulty: params.difficulty.toLowerCase(), // MIXED→mixed, EASY→easy, etc.
+        questionCount: requestedCount,
+      };
+    }
 
     const url = `${this.baseUrl}/ai/generate`;
     this.logger.debug(`POST ${url} — body: ${JSON.stringify(body)}`);
