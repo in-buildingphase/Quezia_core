@@ -31,6 +31,15 @@
 $ npm install
 ```
 
+## Configuration
+
+Set `CORS_ORIGINS` to a comma-separated list to override the default frontend allowlist.
+
+Default allowed origins:
+
+- `http://localhost:5173`
+- `https://quezia-frd.vercel.app`
+
 ## Compile and run the project
 
 ```bash
