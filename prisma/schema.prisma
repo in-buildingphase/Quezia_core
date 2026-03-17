@@ -56,6 +56,7 @@ enum TestStatus {
 enum AttemptStatus {
   ACTIVE
   COMPLETED
+  EXPIRED
   ABANDONED
 }
 
@@ -430,8 +431,10 @@ model TestAttempt {
   test Test @relation(fields: [testId], references: [id])
   user User @relation(fields: [userId], references: [id])
 
-  startedAt   DateTime
-  completedAt DateTime?
+  startedAt       DateTime
+  completedAt     DateTime?
+  endedAt         DateTime?
+  lastHeartbeatAt DateTime?
   status      AttemptStatus
 
   totalScore       Decimal?
@@ -461,7 +464,9 @@ model TestAttemptQuestion {
   isCorrect        Boolean?
   marksAwarded     Decimal?
   timeSpentSeconds Int?
-  markedForReview  Boolean  @default(false)
+  markedForReview  Boolean   @default(false)
+  visitCount       Int       @default(0)
+  lastVisitedAt    DateTime?
 
   visitationData Json?
 

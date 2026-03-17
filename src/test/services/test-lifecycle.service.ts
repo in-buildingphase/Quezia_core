@@ -36,8 +36,13 @@ export class TestLifecycleService {
     percentile: Prisma.Decimal | number | null;
     userRank: number | null;
     riskRatio: Prisma.Decimal | number | null;
+    endedAt: Date | null;
     test: {
       threadId: string | null;
+      durationSeconds: number;
+    };
+    _count?: {
+      questions: number;
     };
   }) {
     if (!attempt.test.threadId) {
@@ -55,20 +60,40 @@ export class TestLifecycleService {
       );
     }
 
+    const now = new Date();
+    const questionsAnswered = attempt._count?.questions ?? 0;
+    const elapsedSeconds = Math.max(
+      0,
+      Math.floor((now.getTime() - attempt.startedAt.getTime()) / 1000),
+    );
+    const timeRemainingSeconds = Math.max(
+      0,
+      attempt.test.durationSeconds - elapsedSeconds,
+    );
+
     return {
       id: attempt.id,
       testId: attempt.testId,
       threadId: attempt.test.threadId,
       userId: attempt.userId,
       status: attempt.status,
+      questionsAnswered,
       startedAt: attempt.startedAt,
       completedAt: attempt.completedAt,
+      endedAt:
+        attempt.status !== AttemptStatus.ACTIVE
+          ? attempt.endedAt || attempt.completedAt || now
+          : null,
       totalScore: attempt.totalScore,
       accuracy: attempt.accuracy,
       timeSpentSeconds: attempt.timeSpentSeconds,
       percentile: attempt.percentile,
       userRank: attempt.userRank,
       riskRatio: attempt.riskRatio,
+      serverTime: now,
+      timeRemainingSeconds,
+      elapsedSeconds,
+      testDurationSeconds: attempt.test.durationSeconds,
     };
   }
 
@@ -88,6 +113,7 @@ export class TestLifecycleService {
         status: true,
         startedAt: true,
         completedAt: true,
+        endedAt: true,
         totalScore: true,
         accuracy: true,
         timeSpentSeconds: true,
@@ -97,6 +123,16 @@ export class TestLifecycleService {
         test: {
           select: {
             threadId: true,
+            durationSeconds: true,
+          },
+        },
+        _count: {
+          select: {
+            questions: {
+              where: {
+                selectedAnswer: { not: null },
+              },
+            },
           },
         },
       },
@@ -115,20 +151,62 @@ export class TestLifecycleService {
         status: true,
         startedAt: true,
         completedAt: true,
+        endedAt: true,
         totalScore: true,
         accuracy: true,
         percentile: true,
         userRank: true,
         timeSpentSeconds: true,
         riskRatio: true,
+        test: {
+          select: {
+            durationSeconds: true,
+          },
+        },
+        _count: {
+          select: {
+            questions: {
+              where: {
+                selectedAnswer: { not: null },
+              },
+            },
+          },
+        },
       },
     });
-
     if (!attempt) throw new NotFoundException('Attempt not found');
     if (attempt.userId !== userId)
       throw new ForbiddenException('Not your attempt');
 
-    return attempt;
+    const now = new Date();
+    const elapsedSeconds = Math.max(
+      0,
+      Math.floor((now.getTime() - attempt.startedAt.getTime()) / 1000),
+    );
+
+    // Auto-submit if time has expired
+    if (
+      attempt.status === AttemptStatus.ACTIVE &&
+      elapsedSeconds >= attempt.test.durationSeconds
+    ) {
+      await this.completeAttempt(attemptId, userId, true);
+      return this.getAttemptById(attemptId, userId);
+    }
+
+    const questionsAnswered = attempt._count?.questions ?? 0;
+    const timeRemainingSeconds = Math.max(
+      0,
+      attempt.test.durationSeconds - elapsedSeconds,
+    );
+
+    return {
+      ...attempt,
+      questionsAnswered,
+      serverTime: now,
+      timeRemainingSeconds,
+      elapsedSeconds,
+      testDurationSeconds: attempt.test.durationSeconds,
+    };
   }
 
   async getAttemptQuestions(attemptId: string, userId: string) {
@@ -141,6 +219,7 @@ export class TestLifecycleService {
     if (attempt.userId !== userId)
       throw new ForbiddenException('Not your attempt');
 
+    // 1. Fetch static questions
     const questions = await this.prisma.testQuestion.findMany({
       where: { testId: attempt.testId },
       orderBy: { sequence: 'asc' },
@@ -158,12 +237,40 @@ export class TestLifecycleService {
       },
     });
 
+    // 2. Fetch user progress for this attempt
+    const attemptQuestions = await this.prisma.testAttemptQuestion.findMany({
+      where: { attemptId },
+      select: {
+        testQuestionId: true,
+        selectedAnswer: true,
+        markedForReview: true,
+      },
+    });
+
+    // 3. Create a lookup map
+    const progressMap = new Map<
+      string,
+      { selectedAnswer: string | null; isMarked: boolean }
+    >();
+    for (const aq of attemptQuestions) {
+      progressMap.set(aq.testQuestionId, {
+        selectedAnswer: aq.selectedAnswer,
+        isMarked: aq.markedForReview,
+      });
+    }
+
+    // 4. Merge
     // Expose the stored snapshot as `contentPayload` so the API contract
     // matches the Question registry field name.
-    return questions.map(({ contentSnapshot, ...rest }) => ({
-      ...rest,
-      contentPayload: contentSnapshot,
-    }));
+    return questions.map(({ contentSnapshot, ...rest }) => {
+      const progress = progressMap.get(rest.id);
+      return {
+        ...rest,
+        contentPayload: contentSnapshot,
+        selectedAnswer: progress?.selectedAnswer ?? null,
+        isMarked: progress?.isMarked ?? false,
+      };
+    });
   }
 
   async startAttempt(testId: string, userId: string) {
@@ -218,6 +325,20 @@ export class TestLifecycleService {
       userRank: true,
       timeSpentSeconds: true,
       riskRatio: true,
+      test: {
+        select: {
+          durationSeconds: true,
+        },
+      },
+      _count: {
+        select: {
+          questions: {
+            where: {
+              selectedAnswer: { not: null },
+            },
+          },
+        },
+      },
     } as const;
 
     // Use a Serializable transaction so concurrent requests cannot both pass the
@@ -247,7 +368,35 @@ export class TestLifecycleService {
       );
 
     try {
-      return await tryCreate();
+      const attemptResponse = await tryCreate();
+      const now = new Date();
+      const elapsedSeconds = Math.max(
+        0,
+        Math.floor((now.getTime() - attemptResponse.startedAt.getTime()) / 1000)
+      );
+
+      // Auto-submit if time has expired (for resumed attempts)
+      if (
+        attemptResponse.status === AttemptStatus.ACTIVE &&
+        elapsedSeconds >= attemptResponse.test.durationSeconds
+      ) {
+        await this.completeAttempt(attemptResponse.id, userId, true);
+        return this.getAttemptById(attemptResponse.id, userId);
+      }
+
+      const questionsAnswered = attemptResponse._count?.questions ?? 0;
+      const timeRemainingSeconds = Math.max(
+        0,
+        attemptResponse.test.durationSeconds - elapsedSeconds
+      );
+      return {
+        ...attemptResponse,
+        questionsAnswered,
+        serverTime: now,
+        timeRemainingSeconds,
+        elapsedSeconds,
+        testDurationSeconds: attemptResponse.test.durationSeconds,
+      };
     } catch (e: any) {
       // P2034: serialization failure — a concurrent tx won the race; return
       // whichever active attempt it created.
@@ -256,7 +405,33 @@ export class TestLifecycleService {
           where: { testId, userId, status: AttemptStatus.ACTIVE },
           select: ATTEMPT_SELECT,
         });
-        if (existing) return existing;
+        if (existing) {
+          const now = new Date();
+          const elapsedSeconds = Math.max(
+            0,
+            Math.floor((now.getTime() - existing.startedAt.getTime()) / 1000)
+          );
+
+          // Auto-submit if time has expired
+          if (elapsedSeconds >= existing.test.durationSeconds) {
+            await this.completeAttempt(existing.id, userId, true);
+            return this.getAttemptById(existing.id, userId);
+          }
+
+          const questionsAnswered = existing._count?.questions ?? 0;
+          const timeRemainingSeconds = Math.max(
+            0,
+            existing.test.durationSeconds - elapsedSeconds
+          );
+          return {
+            ...existing,
+            questionsAnswered,
+            serverTime: now,
+            timeRemainingSeconds,
+            elapsedSeconds,
+            testDurationSeconds: existing.test.durationSeconds,
+          };
+        }
       }
       throw e;
     }
@@ -267,7 +442,7 @@ export class TestLifecycleService {
     dto: SubmitAnswerDto,
     userId: string,
   ) {
-    const { questionId, answer, timeSpentSeconds, visitationData } = dto;
+    const { questionId, answer } = dto;
 
     const attempt = await this.prisma.testAttempt.findUnique({
       where: { id: attemptId },
@@ -276,6 +451,12 @@ export class TestLifecycleService {
         testId: true,
         userId: true,
         status: true,
+        startedAt: true,
+        test: {
+          select: {
+            durationSeconds: true,
+          },
+        },
       },
     });
 
@@ -284,6 +465,14 @@ export class TestLifecycleService {
       throw new ForbiddenException('Not your attempt');
     if (attempt.status !== AttemptStatus.ACTIVE) {
       throw new BadRequestException('Attempt is no longer active');
+    }
+
+    const elapsedSeconds = (Date.now() - attempt.startedAt.getTime()) / 1000;
+
+    // Strict cutoff
+    if (elapsedSeconds >= attempt.test.durationSeconds) {
+      await this.completeAttempt(attempt.id, userId, true);
+      throw new BadRequestException('Test auto-submitted due to timeout');
     }
 
     const testQuestion = await this.prisma.testQuestion.findFirst({
@@ -310,20 +499,20 @@ export class TestLifecycleService {
       },
       update: {
         selectedAnswer: answer,
-        ...(timeSpentSeconds !== undefined && { timeSpentSeconds }),
-        ...(visitationData !== undefined && { visitationData }),
       },
       create: {
         attemptId,
         testQuestionId: testQuestion.id,
         selectedAnswer: answer,
-        ...(timeSpentSeconds !== undefined && { timeSpentSeconds }),
-        ...(visitationData !== undefined && { visitationData }),
       },
     });
   }
 
-  async completeAttempt(attemptId: string, userId: string) {
+  async completeAttempt(
+    attemptId: string,
+    userId: string,
+    isAutoSubmit = false,
+  ) {
     const attempt = await this.prisma.testAttempt.findUnique({
       where: { id: attemptId },
       select: {
@@ -338,6 +527,10 @@ export class TestLifecycleService {
     if (attempt.userId !== userId)
       throw new ForbiddenException('Not your attempt');
     if (attempt.status !== AttemptStatus.ACTIVE) {
+      // Idempotent return handles double-submit (e.g. user hits submit right at zero + auto-submit triggered)
+      if (attempt.status === AttemptStatus.COMPLETED || attempt.status === AttemptStatus.EXPIRED) {
+        return this.getAttemptById(attemptId, userId);
+      }
       throw new BadRequestException('Attempt already completed');
     }
 
@@ -349,17 +542,35 @@ export class TestLifecycleService {
       throw new BadRequestException('Failed to grade attempt');
     }
 
-    // 2. Transactional Update with all analytics
+    // 2. Transactional Update with all analytics + optimistic concurrency check inside
     const result = await this.prisma.$transaction(
       async (tx) => {
+        // Double check status inside transaction to prevent race conditions
+        const currentAttempt = await tx.testAttempt.findUnique({
+          where: { id: attemptId }
+        });
+
+        if (currentAttempt?.status !== AttemptStatus.ACTIVE) {
+          return tx.testAttempt.findUnique({ where: { id: attemptId } });
+        }
+
+        // Compute totalTimeSpent = SUM of all per-question times
+        const timeAgg = await tx.testAttemptQuestion.aggregate({
+          where: { attemptId },
+          _sum: { timeSpentSeconds: true },
+        });
+        const totalTimeSpent = timeAgg._sum.timeSpentSeconds ?? 0;
+
         await tx.testAttempt.update({
           where: { id: attemptId },
           data: {
-            status: AttemptStatus.COMPLETED,
+            status: isAutoSubmit ? AttemptStatus.EXPIRED : AttemptStatus.COMPLETED,
             completedAt: new Date(),
+            endedAt: new Date(),
             totalScore: gradingResults.totalScore,
             accuracy: gradingResults.accuracy,
             riskRatio: gradingResults.riskRatio,
+            timeSpentSeconds: totalTimeSpent,
           },
         });
 
