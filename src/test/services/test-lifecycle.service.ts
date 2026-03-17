@@ -3,6 +3,7 @@ import {
   NotFoundException,
   BadRequestException,
   ForbiddenException,
+  InternalServerErrorException,
 } from '@nestjs/common';
 import { PrismaService } from '../../prisma/prisma.service';
 import { AttemptStatus, Prisma, TestStatus, UserRole } from '@prisma/client';
@@ -22,26 +23,86 @@ export class TestLifecycleService {
     private readonly questionFetcher: QuestionFetcherService,
   ) { }
 
+  private toAttemptSummary(attempt: {
+    id: string;
+    testId: string;
+    userId: string;
+    status: AttemptStatus;
+    startedAt: Date;
+    completedAt: Date | null;
+    totalScore: Prisma.Decimal | number | null;
+    accuracy: Prisma.Decimal | number | null;
+    timeSpentSeconds: number | null;
+    percentile: Prisma.Decimal | number | null;
+    userRank: number | null;
+    riskRatio: Prisma.Decimal | number | null;
+    test: {
+      threadId: string | null;
+    };
+  }) {
+    if (!attempt.test.threadId) {
+      throw new InternalServerErrorException(
+        'Attempt is missing threadId and cannot be grouped correctly',
+      );
+    }
+
+    if (
+      attempt.status === AttemptStatus.COMPLETED &&
+      (attempt.totalScore === null || attempt.accuracy === null)
+    ) {
+      throw new InternalServerErrorException(
+        'Completed attempt is missing grading data',
+      );
+    }
+
+    return {
+      id: attempt.id,
+      testId: attempt.testId,
+      threadId: attempt.test.threadId,
+      userId: attempt.userId,
+      status: attempt.status,
+      startedAt: attempt.startedAt,
+      completedAt: attempt.completedAt,
+      totalScore: attempt.totalScore,
+      accuracy: attempt.accuracy,
+      timeSpentSeconds: attempt.timeSpentSeconds,
+      percentile: attempt.percentile,
+      userRank: attempt.userRank,
+      riskRatio: attempt.riskRatio,
+    };
+  }
+
   async getAttempts(userId: string, threadId?: string) {
     const where: any = { userId };
     if (threadId) {
       where.test = { threadId };
     }
 
-    return this.prisma.testAttempt.findMany({
+    const attempts = await this.prisma.testAttempt.findMany({
       where,
       orderBy: { startedAt: 'desc' },
-      include: {
+      select: {
+        id: true,
+        testId: true,
+        userId: true,
+        status: true,
+        startedAt: true,
+        completedAt: true,
+        totalScore: true,
+        accuracy: true,
+        timeSpentSeconds: true,
+        percentile: true,
+        userRank: true,
+        riskRatio: true,
         test: {
           select: {
-            id: true,
-            versionNumber: true,
-            totalQuestions: true,
-            totalMarks: true,
+            threadId: true,
           },
         },
       },
     });
+
+    return attempts.map((attempt) => this.toAttemptSummary(attempt));
   }
 
   async getAttemptById(attemptId: string, userId: string) {

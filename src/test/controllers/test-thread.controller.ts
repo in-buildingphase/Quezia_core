@@ -22,7 +22,7 @@ export class TestThreadController {
     @Body() dto: CreateThreadDto,
     @CurrentUser() user: { userId: string; role: UserRole },
   ) {
-    return this.testService.createThread(dto, user.userId, user.role);
+    return this.testService.createThread(dto, user.userId);
   }
 
   @Get(':id')

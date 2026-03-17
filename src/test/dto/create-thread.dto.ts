@@ -22,5 +22,5 @@ export class CreateThreadDto {
 
   @IsObject()
   @IsNotEmpty()
-  baseGenerationConfig: any;
+  baseGenerationConfig: Record<string, unknown>;
 }

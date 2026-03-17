@@ -42,10 +42,23 @@ export class AuthService {
     private readonly jwtService: JwtService,
   ) {}
 
+  private normalizeEmail(email: string): string {
+    return email.trim().toLowerCase();
+  }
+
   async register(payload: RegisterDto): Promise<AuthResponse> {
+    const normalizedEmail = this.normalizeEmail(payload.email);
+    const normalizedUsername = payload.username.trim();
+    const normalizedUsernameAsEmail = this.normalizeEmail(normalizedUsername);
+
     const existing = await this.prisma.user.findFirst({
       where: {
-        OR: [{ email: payload.email }, { username: payload.username }],
+        OR: [
+          { email: normalizedEmail },
+          { username: normalizedUsername },
+          { email: normalizedUsernameAsEmail },
+          { username: normalizedEmail },
+        ],
       },
     });
 
@@ -58,8 +71,8 @@ export class AuthService {
 
     const user = await this.prisma.user.create({
       data: {
-        email: payload.email,
-        username: payload.username,
+        email: normalizedEmail,
+        username: normalizedUsername,
         passwordHash,
         emailVerificationToken,
         profile: {
@@ -92,18 +105,43 @@ export class AuthService {
   private static readonly LOCKOUT_DURATION_MS = 15 * 60 * 1000; // 15 minutes
 
   async login(payload: LoginDto): Promise<AuthResponse> {
-    const user = await this.prisma.user.findUnique({
-      where: { email: payload.email },
+    const identifier = payload.identifier.trim();
+    const normalizedEmail = this.normalizeEmail(identifier);
+    const normalizedUsername = identifier;
+
+    const users = await this.prisma.user.findMany({
+      where: {
+        OR: [{ email: normalizedEmail }, { username: normalizedUsername }],
+      },
+      take: 2,
     });
 
+    if (users.length > 1) {
+      await this.logAuthEvent(
+        null,
+        AuthEventType.LOGIN,
+        AuthEventStatus.FAILURE,
+        {
+          reason: 'Ambiguous identifier',
+          identifier,
+        },
+      );
+      throw new UnauthorizedException('Invalid credentials');
+    }
+
+    const user = users[0];
+
     if (!user) {
-      if (payload.email)
-        await this.logAuthEvent(
-          null,
-          AuthEventType.LOGIN,
-          AuthEventStatus.FAILURE,
-          { reason: 'User not found', email: payload.email },
-        );
+      await this.logAuthEvent(
+        null,
+        AuthEventType.LOGIN,
+        AuthEventStatus.FAILURE,
+        {
+          reason: 'User not found',
+          ...(normalizedEmail ? { email: normalizedEmail } : {}),
+          ...(normalizedUsername ? { username: normalizedUsername } : {}),
+        },
+      );
       throw new UnauthorizedException('Invalid credentials');
     }
 
@@ -255,8 +293,10 @@ export class AuthService {
   async forgotPassword(
     payload: ForgotPasswordDto,
   ): Promise<{ message: string }> {
+    const normalizedEmail = this.normalizeEmail(payload.email);
+
     const user = await this.prisma.user.findUnique({
-      where: { email: payload.email },
+      where: { email: normalizedEmail },
     });
 
     if (user) {
@@ -284,7 +324,7 @@ export class AuthService {
         null,
         AuthEventType.PASSWORD_RESET_REQUEST,
         AuthEventStatus.FAILURE,
-        { reason: 'User not found', email: payload.email },
+        { reason: 'User not found', email: normalizedEmail },
       );
     }
 
@@ -410,6 +450,54 @@ export class AuthService {
     return crypto.createHash('sha256').update(token).digest('hex');
   }
 
+  private parseTtlToMs(
+    ttl: string | number | undefined,
+    fallbackMs: number,
+  ): number {
+    if (typeof ttl === 'number' && Number.isFinite(ttl) && ttl > 0) {
+      return ttl * 1000;
+    }
+
+    if (typeof ttl !== 'string') {
+      return fallbackMs;
+    }
+
+    const normalized = ttl.trim().toLowerCase();
+
+    if (!normalized) {
+      return fallbackMs;
+    }
+
+    if (/^\d+$/.test(normalized)) {
+      return Number(normalized) * 1000;
+    }
+
+    const parts = normalized.match(/^(\d+)\s*([smhd])$/);
+    if (!parts) {
+      return fallbackMs;
+    }
+
+    const value = Number(parts[1]);
+
+    if (!Number.isFinite(value) || value <= 0) {
+      return fallbackMs;
+    }
+
+    const unit = parts[2];
+    switch (unit) {
+      case 's':
+        return value * 1000;
+      case 'm':
+        return value * 60 * 1000;
+      case 'h':
+        return value * 60 * 60 * 1000;
+      case 'd':
+        return value * 24 * 60 * 60 * 1000;
+      default:
+        return fallbackMs;
+    }
+  }
+
   private signTokens(user: AuthUser): AuthTokens {
     const payload: JwtPayload = {
       sub: user.id,
@@ -442,9 +530,12 @@ export class AuthService {
   ): Promise<AuthResponse> {
     const tokens = this.signTokens({ id: userId, email, role });
 
-    // Calculate refresh token expiration date manually assuming "7d" format
-    const days = parseInt(authConstants.refreshTokenTtl) || 7;
-    const expiresAt = new Date(Date.now() + days * 24 * 60 * 60 * 1000);
+    const defaultRefreshTtlMs = 7 * 24 * 60 * 60 * 1000;
+    const refreshTtlMs = this.parseTtlToMs(
+      authConstants.refreshTokenTtl,
+      defaultRefreshTtlMs,
+    );
+    const expiresAt = new Date(Date.now() + refreshTtlMs);
 
     const refreshTokenHash = await this.hashToken(tokens.refreshToken);
 
