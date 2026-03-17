@@ -1,4 +1,4 @@
-import { IsNotEmpty, IsString, IsOptional, IsNumber } from 'class-validator';
+import { IsNotEmpty, IsString } from 'class-validator';
 
 export class SubmitAnswerDto {
   @IsNotEmpty()
@@ -8,11 +8,4 @@ export class SubmitAnswerDto {
   @IsNotEmpty()
   @IsString()
   answer: string;
-
-  @IsOptional()
-  @IsNumber()
-  timeSpentSeconds?: number;
-
-  @IsOptional()
-  visitationData?: any;
 }

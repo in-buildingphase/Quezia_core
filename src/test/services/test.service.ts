@@ -6,17 +6,128 @@ import {
 } from '@nestjs/common';
 import { PrismaService } from '../../prisma/prisma.service';
 import { CreateThreadDto } from '../dto/create-thread.dto';
-import { TestStatus, UserRole } from '@prisma/client';
+import { Prisma, TestStatus, UserRole } from '@prisma/client';
+
+type ThreadGenerationConfig = {
+  subjects: Prisma.JsonValue | null;
+  difficulty: Prisma.JsonValue | null;
+};
+
+type ThreadSummary = {
+  id: string;
+  examId: string;
+  originType: string;
+  createdByUserId: string | null;
+  title: string;
+  baseGenerationConfig: Prisma.JsonValue;
+  createdAt: Date;
+};
+
+type SectionSnapshotSummary = {
+  sectionId?: string;
+  questionCount?: number;
+  subject?: string;
+};
 
 @Injectable()
 export class TestService {
-  constructor(private readonly prisma: PrismaService) { }
+  constructor(private readonly prisma: PrismaService) {}
+
+  private isJsonObject(
+    value: Prisma.JsonValue | null | undefined,
+  ): value is Prisma.JsonObject {
+    return !!value && typeof value === 'object' && !Array.isArray(value);
+  }
+
+  private readSectionSnapshots(
+    value: Prisma.JsonValue,
+  ): SectionSnapshotSummary[] | null {
+    if (!Array.isArray(value)) {
+      return null;
+    }
+
+    return value
+      .filter((entry): entry is Prisma.JsonObject => this.isJsonObject(entry))
+      .map((entry) => ({
+        sectionId:
+          typeof entry.sectionId === 'string' ? entry.sectionId : undefined,
+        questionCount:
+          typeof entry.questionCount === 'number'
+            ? entry.questionCount
+            : undefined,
+        subject: typeof entry.subject === 'string' ? entry.subject : undefined,
+      }));
+  }
+
+  private toThreadSummary(thread: ThreadSummary) {
+    return {
+      id: thread.id,
+      examId: thread.examId,
+      originType: thread.originType,
+      createdByUserId: thread.createdByUserId,
+      title: thread.title,
+      baseGenerationConfig: this.pickThreadGenerationConfig(
+        thread.baseGenerationConfig,
+      ),
+      createdAt: thread.createdAt,
+    };
+  }
+
+  private pickThreadGenerationConfig(
+    baseGenerationConfig: Prisma.JsonValue,
+  ): ThreadGenerationConfig {
+    if (!this.isJsonObject(baseGenerationConfig)) {
+      return {
+        subjects: null,
+        difficulty: null,
+      };
+    }
+
+    return {
+      subjects: baseGenerationConfig.subjects ?? null,
+      difficulty: baseGenerationConfig.difficulty ?? null,
+    };
+  }
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // TEST: list by current user ownership
+  // A user can only view tests from threads they created.
+  // ─────────────────────────────────────────────────────────────────────────
+  async getTestsByUser(userId: string) {
+    return this.prisma.test.findMany({
+      where: {
+        thread: {
+          createdByUserId: userId,
+        },
+      },
+      select: {
+        id: true,
+        threadId: true,
+        versionNumber: true,
+        examId: true,
+        status: true,
+        totalQuestions: true,
+        totalMarks: true,
+        durationSeconds: true,
+        createdAt: true,
+        thread: {
+          select: {
+            id: true,
+            title: true,
+            originType: true,
+            createdByUserId: true,
+          },
+        },
+      },
+      orderBy: { createdAt: 'desc' },
+    });
+  }
 
   // ─────────────────────────────────────────────────────────────────────────
   // THREAD: create
   // Locks if exam is inactive. Creator is null for SYSTEM-originated threads.
   // ─────────────────────────────────────────────────────────────────────────
-  async createThread(dto: CreateThreadDto, userId: string, role: UserRole) {
+  async createThread(dto: CreateThreadDto, userId: string) {
     const exam = await this.prisma.exam.findUnique({
       where: { id: dto.examId },
     });
@@ -34,7 +145,8 @@ export class TestService {
         examId: dto.examId,
         originType: dto.originType,
         title: dto.title,
-        baseGenerationConfig: dto.baseGenerationConfig,
+        baseGenerationConfig:
+          dto.baseGenerationConfig as Prisma.InputJsonObject,
         // Null for SYSTEM origin to express "no human creator"
         createdByUserId: dto.originType === 'SYSTEM' ? null : userId,
       },
@@ -45,18 +157,32 @@ export class TestService {
   // THREAD: list by user
   // ─────────────────────────────────────────────────────────────────────────
   async getThreadsByUser(userId: string, role: UserRole) {
+    const query = {
+      select: {
+        id: true,
+        examId: true,
+        originType: true,
+        createdByUserId: true,
+        title: true,
+        baseGenerationConfig: true,
+        createdAt: true,
+      },
+      orderBy: { createdAt: 'desc' as const },
+    };
+
     if (role === UserRole.ADMIN) {
-      return this.prisma.testThread.findMany({
-        orderBy: { createdAt: 'desc' },
-      });
+      const threads = await this.prisma.testThread.findMany(query);
+      return threads.map((thread) => this.toThreadSummary(thread));
     }
 
-    return this.prisma.testThread.findMany({
+    const threads = await this.prisma.testThread.findMany({
       where: {
         createdByUserId: userId,
       },
-      orderBy: { createdAt: 'desc' },
+      ...query,
     });
+
+    return threads.map((thread) => this.toThreadSummary(thread));
   }
 
   // ─────────────────────────────────────────────────────────────────────────
@@ -96,11 +222,11 @@ export class TestService {
   async getLatestVersion(threadId: string, userId: string, role: UserRole) {
     const thread = await this.getThreadById(threadId, userId, role);
 
-    if ((thread.tests as any[]).length === 0) {
+    if (thread.tests.length === 0) {
       throw new NotFoundException('No versions found for this thread');
     }
 
-    return (thread.tests as any[])[0]; // Already ordered desc
+    return thread.tests[0];
   }
 
   // ─────────────────────────────────────────────────────────────────────────
@@ -150,8 +276,10 @@ export class TestService {
       );
     }
 
-    const ruleSnapshot = test.ruleSnapshot as any;
-    const sectionSnapshot = test.sectionSnapshot as any[];
+    const ruleSnapshot = this.isJsonObject(test.ruleSnapshot)
+      ? test.ruleSnapshot
+      : null;
+    const sectionSnapshot = this.readSectionSnapshots(test.sectionSnapshot);
     const questions = test.questions;
 
     // ── Required snapshots must be present ──────────────────────────────
@@ -170,8 +298,8 @@ export class TestService {
     if (actualCount !== test.totalQuestions) {
       throw new BadRequestException(
         `Question count mismatch: declared totalQuestions=${test.totalQuestions} ` +
-        `but actual snapshotted questions=${actualCount}. ` +
-        'Inject the missing questions before publishing.',
+          `but actual snapshotted questions=${actualCount}. ` +
+          'Inject the missing questions before publishing.',
       );
     }
 
@@ -185,8 +313,8 @@ export class TestService {
     if (Math.abs(marksSum - declaredMarks) > 0.001) {
       throw new BadRequestException(
         `Marks sum mismatch: declared totalMarks=${declaredMarks} ` +
-        `but sum of question marks=${marksSum.toFixed(4)}. ` +
-        'Fix question marks before publishing.',
+          `but sum of question marks=${marksSum.toFixed(4)}. ` +
+          'Fix question marks before publishing.',
       );
     }
 
@@ -201,8 +329,8 @@ export class TestService {
       if (actual !== declared) {
         throw new BadRequestException(
           `Section "${sectionId}" (subject: ${section.subject}) has ${actual} question(s) ` +
-          `but sectionSnapshot declares ${declared}. ` +
-          'Inject the correct number of questions per section.',
+            `but sectionSnapshot declares ${declared}. ` +
+            'Inject the correct number of questions per section.',
         );
       }
     }
@@ -284,7 +412,9 @@ export class TestService {
     // Ownership and Role gating
     if (role !== UserRole.ADMIN) {
       if (!thread.createdByUserId || thread.createdByUserId !== userId) {
-        throw new ForbiddenException('You do not have access to delete this thread');
+        throw new ForbiddenException(
+          'You do not have access to delete this thread',
+        );
       }
       // System threads (createdByUserId: null) are not deletable by learners
       if (thread.createdByUserId === null) {
@@ -316,7 +446,9 @@ export class TestService {
       });
     });
 
-    return { message: 'Test thread and all associated data deleted successfully' };
+    return {
+      message: 'Test thread and all associated data deleted successfully',
+    };
   }
 
   // ─────────────────────────────────────────────────────────────────────────

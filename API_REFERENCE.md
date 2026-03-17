@@ -33,6 +33,7 @@ HTTP response codes follow NestJS defaults unless `@HttpCode(...)` overrides the
   { "accessToken": "string", "refreshToken": "string", "user": { "id": "uuid", "email": "string", "role": "LEARNER|ADMIN" } }
   ```
 - **Errors:** `409` — email or username already exists.
+- **Production constraint:** email and username must also be globally unique across each other (a username cannot equal another user's email, and vice versa) to keep identifier login unambiguous.
 - **Side effects:** Creates `UserProfile` row. Logs `REGISTER` + `LOGIN` auth events.
 
 ---
@@ -42,8 +43,9 @@ HTTP response codes follow NestJS defaults unless `@HttpCode(...)` overrides the
 - **Response:** `200 OK`
 - **Request body:**
   ```json
-  { "email": "string", "password": "string" }
+  { "identifier": "string", "password": "string" }
   ```
+  `identifier` is a single login key and may contain either an email or a username (including usernames with `@`). Backend validates by checking both user email and username with this same value.
 - **Response body:**
   ```json
   {
@@ -58,7 +60,9 @@ HTTP response codes follow NestJS defaults unless `@HttpCode(...)` overrides the
   ```
 
 - **Errors:**
+  - `400` — invalid payload (for example missing `identifier` or extra unknown fields).
   - `401` — invalid credentials or account deactivated.
+  - `401` — ambiguous legacy identifier collision (should not occur after production uniqueness constraints).
   - `429 Too Many Requests` — account locked after **5 failed attempts** for **15 minutes**. Body includes `{ "retryAfterSeconds": number }`.
 - **Side effects:** Resets `failedLoginAttempts` and `lockedUntil` on success. Updates `lastLogin`.
 
@@ -564,6 +568,28 @@ DRAFT → PUBLISHED → ARCHIVED
 
 ---
 
+### GET `/test-threads`
+- **Guard:** `JwtAuthGuard`
+- **Response:** `200 OK`
+- **Response body:** Array of thread summaries. Each item contains exactly:
+  ```json
+  {
+    "id": "uuid",
+    "examId": "uuid",
+    "originType": "SYSTEM|GENERATED",
+    "createdByUserId": "uuid|null",
+    "title": "string",
+    "baseGenerationConfig": {
+      "subjects": "any|null",
+      "difficulty": "EASY|MEDIUM|HARD|MIXED|null"
+    },
+    "createdAt": "ISO date"
+  }
+  ```
+- **Access rule:** Learners receive only their own threads. Admins receive all threads.
+
+---
+
 ### GET `/test-threads/:id`
 - **Guard:** `JwtAuthGuard`
 - **Response:** `200 OK`
@@ -602,6 +628,14 @@ DRAFT → PUBLISHED → ARCHIVED
   }
   ```
 - **Response body:** New `Test` version (DRAFT) with `versionNumber` incremented +1 from latest.
+
+---
+
+### GET `/tests`
+- **Guard:** `JwtAuthGuard`
+- **Response:** `200 OK`
+- **Access rule:** Returns only tests that belong to threads created by the authenticated user.
+- **Response body:** Array of test summaries including thread metadata.
 
 ---
 
@@ -698,6 +732,33 @@ DRAFT → PUBLISHED → ARCHIVED
 - **Idempotency:** If an `ACTIVE` attempt already exists for this user+test, it is returned. Uses a `SERIALIZABLE` transaction to prevent race-condition duplicates.
 - **Response body:** `{ "id": "uuid", "status": "ACTIVE" }`
 - **Errors:** `400` — test not `PUBLISHED`. `403` — no active subscription (SYSTEM test).
+
+---
+
+### GET `/attempts`
+- **Guard:** `JwtAuthGuard`
+- **Response:** `200 OK`
+- **Query params:** `threadId (optional uuid)` — restricts results to attempts on tests inside the given thread.
+- **Response body:** Array of attempt summaries. Each item contains exactly:
+  ```json
+  {
+    "id": "uuid",
+    "testId": "uuid",
+    "threadId": "uuid",
+    "userId": "uuid",
+    "status": "ACTIVE|COMPLETED|ABANDONED",
+    "startedAt": "ISO date",
+    "completedAt": "ISO date|null",
+    "totalScore": "number|null",
+    "accuracy": "number|null",
+    "timeSpentSeconds": "number|null",
+    "percentile": "number|null",
+    "userRank": "number|null",
+    "riskRatio": "number|null"
+  }
+  ```
+- **Invariant:** `threadId` is always present.
+- **Invariant:** When `status` is `COMPLETED`, both `totalScore` and `accuracy` are non-null.
 
 ---
 

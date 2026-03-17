@@ -26,6 +26,15 @@ export class TestController {
     private readonly injectionService: TestQuestionInjectionService,
   ) {}
 
+  // ─── Test Listing (owned by current user) ───────────────────────────────
+
+  @Get()
+  async listMyTests(
+    @CurrentUser() user: { userId: string; role: UserRole },
+  ) {
+    return this.testService.getTestsByUser(user.userId);
+  }
+
   // ─── Status Transitions (admin only) ────────────────────────────────────
 
   @Patch(':id/publish')
