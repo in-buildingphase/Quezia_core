@@ -32,6 +32,12 @@ export class UserService {
             country: true,
             timezone: true,
             targetExamId: true,
+            targetExam: {
+              select: {
+                id: true,
+                name: true,
+              },
+            },
             targetExamYear: true,
             preparationStage: true,
             studyGoal: true,
@@ -70,8 +76,10 @@ export class UserService {
     await this.prisma.userProfile.upsert({
       where: { userId },
       update: {
-        targetExamId: payload.targetExamId ?? null,
-        targetExamYear: payload.targetExamYear ?? null,
+        ...(payload.targetExamId !== undefined && { targetExamId: payload.targetExamId }),
+        ...(payload.targetExamYear !== undefined && {
+          targetExamYear: payload.targetExamYear,
+        }),
       },
       create: {
         userId,
