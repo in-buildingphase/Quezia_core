@@ -65,6 +65,11 @@ export class TestGenerationService {
             throw new ForbiddenException('You do not have access to this thread');
         }
 
+        // ── Enforce subscription limits ─────────────────────────────────────────
+        if (role !== UserRole.ADMIN) {
+            await this.checkSubscriptionConstraint(userId, thread.examId);
+        }
+
         // ── Selection Logic: prompt-driven vs blueprint-driven ─────────────────
         // If a prompt is explicitly passed in the DTO, we default to
         // followsBlueprint=false (AI-only generation).
@@ -117,6 +122,11 @@ export class TestGenerationService {
             throw new ForbiddenException('You do not have access to this thread');
         }
 
+        // ── Enforce subscription limits ─────────────────────────────────────────
+        if (role !== UserRole.ADMIN) {
+            await this.checkSubscriptionConstraint(userId, thread.examId);
+        }
+
         const latestVersion = thread.tests[0];
         const newVersionNumber = latestVersion.versionNumber + 1;
 
@@ -127,6 +137,60 @@ export class TestGenerationService {
             latestVersion.blueprintReferenceId ?? undefined,
             userId,
         );
+    }
+
+    private async checkSubscriptionConstraint(userId: string, examId: string) {
+        // 1. Check if user has an active subscription to a pack for this specific exam
+        const activeSub = await this.prisma.userSubscription.findFirst({
+            where: {
+                userId,
+                status: 'ACTIVE',
+                pack: { examId },
+                expiresAt: { gt: new Date() },
+            },
+        });
+
+        if (activeSub) return; // Users with an active subscription are not limited
+
+        // 2. Enforce daily limit for free users
+        const now = new Date();
+        const startOfDay = new Date(now);
+        startOfDay.setHours(0, 0, 0, 0);
+
+        const endOfDay = new Date(now);
+        endOfDay.setHours(23, 59, 59, 999);
+
+        // Count tests created in this exam's threads by this user today
+        const todaysCount = await this.prisma.test.count({
+            where: {
+                examId,
+                thread: { createdByUserId: userId },
+                createdAt: { gte: startOfDay, lte: endOfDay },
+            },
+        });
+
+        const DAILY_LIMIT = 1;
+        if (todaysCount >= DAILY_LIMIT) {
+             const tomorrow = new Date(startOfDay);
+            tomorrow.setDate(tomorrow.getDate() + 1);
+            
+            const timeUntilResetMs = tomorrow.getTime() - now.getTime();
+            const hours = Math.floor(timeUntilResetMs / (1000 * 60 * 60));
+            const minutes = Math.floor((timeUntilResetMs % (1000 * 60 * 60)) / (1000 * 60));
+            
+            throw new ForbiddenException({
+                statusCode: 403,
+                message: 'Daily test generation limit reached for free tier.',
+                error: 'Forbidden',
+                limit: DAILY_LIMIT,
+                resetAt: tomorrow.toISOString(),
+                retryAfter: {
+                    hours,
+                    minutes,
+                    seconds: Math.floor((timeUntilResetMs % (1000 * 60)) / 1000)
+                }
+            });
+        }
     }
 
     private async createVersion(
